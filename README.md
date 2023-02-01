@@ -32,9 +32,9 @@ $$
 
 blablabla
 
-## Reverse-mode AD
 
-A reverse-mode automatic differentiator works by traversing a given DAG in reverse topologically sorted order (when the algortihm reaches a Node, it has already seen all of the Node's children).
+
+Thus, when the AD algortihm reaches a Node, it has to know this Nodes parents, as well as the local gradient data.
 
 ## DAG construction
 
@@ -42,20 +42,22 @@ The core idea is shared with popular ML libraries such as Tensorflow or PyTorch 
 
 ### Node struct
 
-Each instance of a `Node` object carries a label which is of the type
+A reverse-mode automatic differentiator works by traversing a given DAG in reverse topologically sorted order $[\boldsymbol{N}_1,\dots,\boldsymbol{N}_M]$. The algorithm starts at one of the out-Nodes $\boldsymbol{N}_s\ (s \leq M)$ and stops until it reaches a root-Node. A reverse-mode automatic differentiator accumulates derivative data from Nodes that directly depend on each other (so called *local gradient data*) into *total gradients* of the form $\partial v_s/\partial v_i$. 
+
+In order to "send" the terms ... out to the current Node's parents, the AD algortihm needs to locate these Nodes. We therefor assign a label 
 
 ```julia
 ID = Tuple{Int8,Int8,Int64,Int64} 
 ```
 
-This label contains the data that is needed to access the memory that was allocated when a particular `Node` was instanciated from a tracking an operation. It is specified as follows:
+to each Node, which is specified as follows:
 
 * blabla
 * blabla
 * blabla
 * blabla
 
-Enabling DAG traversion for the reverse-mode automatic differentiator requires adjacency information which we bundle in a struct
+Among plain adjacency info, we will also endow each Node with local gradient data which can be processed by the AD algorithm into the products ... These products will be add as summands into the total gradient attributes of the parents listed in the `ParentData.n` attribute  
 
 ```julia
 struct ParentData
