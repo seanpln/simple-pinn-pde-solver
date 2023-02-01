@@ -1,5 +1,36 @@
 # simple-pinn-pde-solver
 
+## PINN method short
+
+A PINN solver accepts a boundary value problem 
+
+$$
+\begin{cases}
+\mathcal{F}[u] = f & \text{on } \Omega\\
+\mathcal{B}[u] = g & \text{on } \partial{\Omega},\\
+\end{cases}
+$$
+
+as input and returns a solution surrogate 
+
+$$\Psi_{\theta^ast}(\boldsymbol{x}) = A(\boldsymbol{x}) + B(\boldsymbol{x})\Phi_{\theta^ast}(\boldsymbol{x}),$$
+
+where 
+
+$$\theta^{\ast} \in \operatorname{argmin}\limits_{\theta \in \Theta}$$
+
+
+
+
+A PINN solver returns a solution surrogate $\Psi$ an approximate solution to the state $u:\overline{\Omega} \subset \mathbb{R}^d \to \mathbb{R}$ of a system
+
+$$
+\begin{cases}
+\mathcal{F}[u] = f & \text{on } \Omega\\
+\mathcal{B}[u] = g & \text{on } \partial{\Omega},\\
+\end{cases}
+$$
+
 ## The PINN method
 
 A PINN solver works by training a surrogate model $\Psi$ for the state $u:\overline{\Omega} \subset \mathbb{R}^d \to \mathbb{R}$ of a system
@@ -19,9 +50,9 @@ and parametrized by a set of weights and biases $\theta$ of a feedforwad neural 
   
 W.l.o.g. let $\mathcal{B}[\Psi_\theta] = g$. Then the risk is usually expressed as the MSE over the PDE residuals, i.e.
 
-$$ \hat{\mathcal{R}}[\theta] \overset{\text{def}}{=} \sum_{i=1}^{N}{\frac{1}{2}(\mathcal{F}\[\Psi_{\theta}\](\boldsymbol{x}_i) - f(\boldsymbol{x}_i))^2},$$
+$$ \hat{\mathcal{R}}[\theta] \overset{\text{def}}{=} \sum_{i=1}{\frac{1}{2}(\mathcal{F}\[\Psi_{\theta}\](\boldsymbol{x}_i) - f(\boldsymbol{x}_i))^2},$$
 
-where the vector (x_1,\dots,x_N)of training samples is a realization of the random variable $X \sim \bigotimes_{i=1}^{N}{\text{Uni}(\Omega)}$
+where the sum goes over all training examples sampled from $\Omega$.
 
 
 
