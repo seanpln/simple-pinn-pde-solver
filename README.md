@@ -79,15 +79,16 @@ end
 The computation $f(x,y) = (x+y)^2$ can be performed within the two steps $f_1(x,y) = x+y$ and, respectively, $f_2(f_1) = f_1^2$. We show how to construct the DAG corresponding to $f$ with inputs $x=1.0$ and $y=2.0$. To start with, we initialize a tape `t` with two root-Nodes, i.e.
 
 ```julia
-x = Node(value=1.0, tpos=1)
-y = Node(value=2.0, tpos=2)
+x = Node(tpos=1, value=1.0)
+y = Node(tpos=2, value=2.0)
 t = [x, y]
 ```
 
 Next, we append the Node `f_1`, representing the intermediate result from the first computational step, to the tape `t`.
 
 ```julia
-f_1 = Node(tpos  = length(t)+1
+f_1 = Node(tpos  = length(t)+1,
+	   value = x.value + y.value,
 	   pdata = ParentData([1, 2],
 			      [1.0, 1.0]
 	                     )
@@ -95,24 +96,29 @@ f_1 = Node(tpos  = length(t)+1
 push!(t, f_1)
 ```
 
-We can proceed similiarly with the second computational step. However, we automatize this in terms of a "Record-step" method.
+We can automatize Node creation by means of a pre-defined "Record-step" method.
 
 ```julia
 function square!(node::Node, tape::Vector{Node})
+	tpos  = length(t)+1
 	value = node.value
 	pdata = ParentData([node.tpos],
 	                   [2*node.value]
 	                  )
-	push!(tape, Node(value=value,
-			 pdata=pdata			 
+	push!(tape, Node(tpos  = tpos,
+	                 value = value,
+			 pdata = pdata			 
 	                 )
              )
 end
-
 square!(last(t), t)			  
 ```
 
-We can then pass our tape `t` to a reverse-mode automatic differentiator in order to obtain the derivatives $\partial_xf(1,2)$ and $\partial_yf(1,2)$. Note that as soons as the automatic differentiator reaches one of the root-Nodes, there is nothing left to do for the algorithm. Thus, we can split a tape into $\boldsymbol{T}_0$, that holds only the root-Nodes, and $\boldsymbol{T}_c$ which holds all the Nodes that resulted from computations.
+We can then pass our tape `t` to a reverse-mode automatic differentiator in order to obtain the derivatives $\partial_xf(1,2)$ and $\partial_yf(1,2)$.
+
+***
+
+For the "Record-step" functions that are required for our PINN solver, see the file `node.jl`. Note that as soons as the automatic differentiator reaches one of the root-Nodes, there is nothing left to do for the algorithm. Thus, we can split a tape into $\boldsymbol{T}_0$, that holds only the root-Nodes, and $\boldsymbol{T}_c$ which holds all the Nodes that resulted from computations. You will find that the `Node struct` in the file `node.jl` makes use of a four-tuple to identify Nodes. This is because in the proper code we will split the tape even further apart. Namely, $\boldsymbol{T}_0$ will be split into input Nodes 
 
 ## AD Recording
 
@@ -123,8 +129,10 @@ $$ D^{(2,1)}f(\boldsymbol{x}) = \partial_{xxy}f(\boldsymbol{x}).$$
 for some function $f:\mathbb{R}\to\mathbb{R}$. Then we can succeed as follows:
 
 1. Construct the DAG of $f(\boldsymbol{x})$ in the form of a tape `t`.
-2. Feed the tape `t` into a reverse-mode AD algorithm and record the operations performed by this algorithm. This yields a tape `t_p` that contains in particular the Nodes `n_x` and `n_y`.
-3. Feed the tape `t_p` into an automatic differentator with start position `n_x.tpos` and again record its operations, yielding a tape `tape_pp` 
+2. Feed the tape `t` into a reverse-mode AD algorithm and record the operations performed by this algorithm. This yields a tape `t_p` that contains in particular the Nodes `n_x` and `n_y` representing the quantities $\partial_{x}f(\boldsymbol{x})$ and, respectively $\partial_{y}f(\boldsymbol{x})$
+3. Feed the tape `t_p` into an automatic differentator with starting position `n_x.tpos` and again record its operations, yielding a tape `t_pp` which holds Nodes `n_xx` and `n_xy` that hold the derivative values $\partial_{xx}f(\boldsymbol{x})$ and, respectively $\partial_{xy}f(\boldsymbol{x})$.
+4. Finally, run the automatic differentiator with input tape `t_pp` and starting position `n_xx.tpos` which yields a tape `t_ppp`.
+5. Grab the Node `t_ppp[n_xxy.tpos]` and read its value. 
 
 
 
