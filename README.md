@@ -58,14 +58,16 @@ All together, this describes the basic layout of a Node object:
 ```julia
 mutable struct Node
 
-	tpos::ID                     # tape position                 
+	tpos::Int64                  # tape position                 
 	value::Float64               # intermediate result of computational step
         tgrad::Float64               # total gradient (overwritten by 'autodiff')	
 	pdata::ParentData            # parent information
 
-	function Node(value;
+	function Node(;
 		      tpos   = (0,0,0,0),
-		      pdata  = ParentData(ID[], Float64[], Int8[])              
+		      value  = 0.0
+		      tgrad  = 0.0
+		      pdata  = ParentData(Int64[], Float64[])              
 	             )
 		new(tpos, value, tgrad, pdata)
 	end
@@ -74,79 +76,56 @@ end
 
 ### Example.
 
-
-
-
-### Node struct
-
-A reverse-mode automatic differentiator works by traversing a given DAG in reverse topologically sorted order $[\boldsymbol{N}_1,\dots,\boldsymbol{N}_M]$. The algorithm starts at one of the out-Nodes $\boldsymbol{N}_s\ (s \leq M)$ and stops until it reaches a root-Node. A reverse-mode automatic differentiator accumulates derivative data from Nodes that directly depend on each other (so called *local gradient data*) into *total gradients* of the form $\partial v_s/\partial v_i$. 
-
-In order to "send" the terms ... out to the current Node's parents, the AD algortihm needs to locate these Nodes. We therefor assign a label 
+The computation $f(x,y) = (x+y)^2$ can be performed within the two steps $f_1(x,y) = x+y$ and, respectively, $f_2(f_1) = f_1^2$. We show how to construct the DAG corresponding to $f$ with inputs $x=1.0$ and $y=2.0$. To start with, we initialize a tape `t` with two root-Nodes, i.e.
 
 ```julia
-ID = Tuple{Int8,Int8,Int64,Int64} 
+x = Node(value=1.0, tpos=1)
+y = Node(value=2.0, tpos=2)
+t = [x, y]
 ```
 
-to each Node, which is specified as follows:
-
-* blabla
-* blabla
-* blabla
-* blabla
-
-Among plain adjacency info, we will also endow each Node with local gradient data which can be processed by the AD algorithm into the products ... These products will be add as summands into the total gradient attributes of the parents listed in the `ParentData.n` attribute  
+Next, we append the Node `f_1`, representing the intermediate result from the first computational step, to the tape `t`.
 
 ```julia
-struct ParentData
-	n::Vector{ID}		     # tape position
-	x::Vector{Float64}           # local gradient (used by 'autodiff')
-	g::Vector{Int8}              # gradient function (used by 'adrecord')
-end
+f_1 = Node(tpos  = length(t)+1
+	   pdata = ParentData([1, 2],
+			      [1.0, 1.0]
+	                     )
+          )
+push!(t, f_1)
 ```
 
-A `Node` object $\boldsymbol{N}$ contains information about the intermediate results that where used by the operation that created $\boldsymbol{N}$
-
-
-
-### Node 
+We can proceed similiarly with the second computational step. However, we automatize this in terms of a "Record-step" method.
 
 ```julia
-ID      = Tuple{Int8,Int8,Int64,Int64} 
-
-struct ParentData
-	n::Vector{ID}		     # tape position
-	x::Vector{Float64}           # local gradient (used by 'autodiff')
-	g::Vector{Int8}              # gradient function (used by 'adrecord')
+function square!(node::Node, tape::Vector{Node})
+	value = node.value
+	pdata = ParentData([node.tpos],
+	                   [2*node.value]
+	                  )
+	push!(tape, Node(value=value,
+			 pdata=pdata			 
+	                 )
+             )
 end
 
-mutable struct Node
-
-	n::ID                        # tape position
-	ṅ::Int64                     # total gradient's position  (tracked by 'adrecord')                  
-	v::Float64                   # v
-        v̇::Float64                   # total gradient v (set by 'autodiff')	
-	p::ParentData                # parent data
-	# only for parameter nodes:
-	mt::Union{Float64,Nothing}   # adam: first moment
-	vt::Union{Float64,Nothing}   # adam: second moment
-	m̂::Union{Float64,Nothing}    # adam: first moment: bias correction
-	v̂::Union{Float64,Nothing}    # adam: second moment: bias correction
-	#
-
-	function Node(v;
-		      n  = (0,0,0,0),
-		      ṅ  = 0,
-		      v̇  = 0.0,
-		      p  = ParentData(ID[], Float64[], Int8[]),      
-		      mt = nothing,
-		      vt = nothing,
-	              m̂  = nothing,
-	              v̂  = nothing            
-	             )
-		new(n, ṅ, v, v̇, p, mt, vt, m̂ , v̂)
-	end
-end
-
+square!(last(t), t)			  
 ```
 
-The DAG construction boils down to the problem of constructing the DAGs for expressions of the form $D^{\boldsymbol{\alpha}}\Phi_{\theta}(\boldsymbol{x})$, where $\boldsymbol{\alpha} \in \mathbb{N}^p$ is some multiindex and $\boldsymbol{x}$ a training sample. Our idea for constructing these DAGs is to repeatedly record the operations performed by a reverse-mode AD algorithm.
+We can then pass our tape `t` to a reverse-mode automatic differentiator in order to obtain the derivatives $\partial_xf(1,2)$ and $\partial_yf(1,2)$. Note that as soons as the automatic differentiator reaches one of the root-Nodes, there is nothing left to do for the algorithm. Thus, we can split a tape into $\boldsymbol{T}_0$, that holds only the root-Nodes, and $\boldsymbol{T}_c$ which holds all the Nodes that resulted from computations.
+
+## AD Recording
+
+To obtain the DAG that corresponds to an expression of the form $D^{\boldsymbol{\alpha}}f(\boldsymbol{x})$, where $\boldsymbol{\alpha} \in \mathbb{N}^p$ is some multiindex, our idea is to repeatedly record the operations performed by the automatic differentiator itself. For instance, given some $\boldsymbol{x}\in\mathbb{R}^2$, say we want to construct the DAG that corresponds to the expression 
+
+$$ D^{(2,1)}f(\boldsymbol{x}) = \partial_{xxy}f(\boldsymbol{x}).$$
+
+for some function $f:\mathbb{R}\to\mathbb{R}$. Then we can succeed as follows:
+
+1. Construct the DAG of $f(\boldsymbol{x})$ in the form of a tape `t`.
+2. Feed the tape `t` into a reverse-mode AD algorithm and record the operations performed by this algorithm. This yields a tape `t_p` that contains in particular the Nodes `n_x` and `n_y`.
+3. Feed the tape `t_p` into an automatic differentator with start position `n_x.tpos` and again record its operations, yielding a tape `tape_pp` 
+
+
+
+
