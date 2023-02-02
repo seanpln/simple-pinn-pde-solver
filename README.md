@@ -38,7 +38,34 @@ Thus, when the AD algortihm reaches a Node, it has to know this Nodes parents, a
 
 ## DAG construction
 
-The core idea is shared with popular ML libraries such as Tensorflow or PyTorch and relies on recording the performed computations that result in a particular DAG onto a "tape".
+The core idea is shared with popular ML libraries such as Tensorflow or PyTorch and relies on recording the performed computations that result in a particular DAG onto a "tape". The relevant data for each intermediate result will be stored in its own *Node* object `N`. The most basic information hold by such an object is its position on the tape `N.tpos`, and the numerical value `N.value` obtained from the computational step that led to the instanciation of the Node `N`. (The former is of the type `ID`, which is further explained in the **Node struct** section.) To enable graph traversation, we use a struct
+
+```julia
+struct ParentData
+	tpos::Vector{ID}		  # tape positions of parents
+	lgrads::Vector{Float64}           # local gradients of parents (used by 'autodiff')
+end
+```
+
+that lists the identifiers of the Nodes that where called by the computational step that led to `N` as well as how the `N.value` attribute changes infinitesimally when one of the values of the parent Nodes does. All together, this describes the basic layout of a Node object:
+
+mutable struct Node
+
+	tpos::ID                     # tape position                 
+	value::Float64               # intermediate result of computational step
+        tgrad::Float64               # total gradient (set by 'autodiff')	
+	pdata::ParentData            # parent information
+
+	function Node(value;
+		      tpos   = (0,0,0,0),
+		      pdata  = ParentData(ID[], Float64[], Int8[])              
+	             )
+		new(tpos, value, tgrad, pdata)
+	end
+end
+
+
+
 
 ### Node struct
 
