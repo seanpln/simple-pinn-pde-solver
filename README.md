@@ -44,7 +44,7 @@ Thus, by construction, a tape is a topologically sorted list of the DAG vertices
 
 $$ \dot{v}_i\frac{\partial f_i}{\partial v_{n_r}}(v_{n_1},\dots,v_{n_r})$$
 
-to the $r$ parent Nodes $\boldsymbol{N}_{n_1},\dots,\boldsymbol{N}_{n_r}$ of $\boldsymbol{N}_i$.
+to the $r$ parent Nodes $\boldsymbol{N}_{n_1},\dots,\boldsymbol{N}_{n_1}$ of $\boldsymbol{N}_i$.
 
 We will represent Nodes as (mutable) Julia structs. The most basic information hold by an instance `N` of the Node struct is the Node's position on the tape `N.tpos` and the numerical value `N.value` obtained from the computational step that led to the instanciation of the Node `N`. To enable graph traversation, we bundle parent information about a Node in the struct
 
