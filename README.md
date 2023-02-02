@@ -38,15 +38,13 @@ Thus, when the AD algortihm reaches a Node, it has to know this Nodes parents, a
 
 ## Basic DAG construction
 
-The core idea is shared with popular ML libraries such as Tensorflow or PyTorch and relies on recording the series of performed computations $f_1,\dots,f_n$ that result in a particular DAG onto a "tape" $\boldsymbol{T}$, where the relevant data for each intermediate result produced by a step $f_i$ will be stored in its own *Node* object $\boldsymbol{N}$. The tape will be initialized with the *root-Nodes* representing the DAG inputs and a new Node is appended to the end of the tape whenever a step $f_i$ is performed. 
+The core idea is shared with popular ML libraries such as Tensorflow or PyTorch and relies on recording the series of performed computations $f_1,\dots,f_n$ that result in a particular DAG onto a "tape" $\boldsymbol{T}$, where the relevant data for each intermediate result produced by a step $f_i$ will be stored in its own *Node* object $\boldsymbol{N}$. The tape will be initialized with the *root-Nodes* representing the DAG inputs and a new Node is appended to the end of the tape whenever a step $f_i$ is performed. We will represent Nodes as (mutable) Julia structs. The most basic information hold by an instance `N` of the Node struct is the Node's position on the tape `N.tpos` and the numerical value `N.value` obtained from the computational step that led to the instanciation of the Node `N`.
 
-Thus, by construction, a tape is a topologically sorted list of the DAG vertices. Hence the DAG can be traversed by a reverse-mode AD algorithm simply by looping over $\boldsymbol{T} = [\boldsymbol{N}_1,\dots,\boldsymbol{N}_M]$ in reversed order. Such an algorithm gets passed a Node $\boldsymbol{N}_s\ (s \leq M)$ and outputs all the (total) derivatives $\dot{v}_i \overset{\text{def}}{=} dv_s/dv_i,\ (i = 1,\dots,M)$, where $v_i$ is the value hold by Node $\boldsymbol{N}_i$. The algorithm exploits the chain rule to accumulate new total gradients from already computed ones by passing the quantities 
+By construction, a tape is a topologically sorted list of the DAG vertices. Hence the DAG can be traversed by a reverse-mode AD algorithm simply by looping over $\boldsymbol{T} = [\boldsymbol{N}_1,\dots,\boldsymbol{N}_M]$ in reversed order. Such an algorithm gets passed a Node $\boldsymbol{N}_s\ (s \leq M)$ and outputs all the (total) derivatives $\dot{v}_i \overset{\text{def}}{=} dv_s/dv_i,\ (i = 1,\dots,M)$, where $v_i$ is the value hold by Node $\boldsymbol{N}_i$. To achieve this, the algorithm exploits the chain rule to accumulate new total gradients from already computed ones by passing the quantities 
 
 $$ \dot{v}_i\frac{\partial f_i}{\partial v_{n_r}}(v_{n_1},\dots,v_{n_r})$$
 
-to the $r$ parent Nodes $\boldsymbol{N}_{n_1},\dots,\boldsymbol{N}_{n_1}$ of $\boldsymbol{N}_i$.
-
-We will represent Nodes as (mutable) Julia structs. The most basic information hold by an instance `N` of the Node struct is the Node's position on the tape `N.tpos` and the numerical value `N.value` obtained from the computational step that led to the instanciation of the Node `N`. To enable graph traversation, we bundle parent information about a Node in the struct
+to the $r$ parent Nodes $\boldsymbol{N}_{n_1},\dots$ of $\boldsymbol{N}_i$. To allow the AD algorithm the graph traversation, we bundle parent information about a Node in the struct
 
 ```julia
 struct ParentData
@@ -54,12 +52,6 @@ struct ParentData
 	lgrads::Vector{Float64}           # local gradients of parents (used by 'autodiff')
 end
 ```
-
-Note that the `ParentData` struct also has an attribute `lgrads` which contains information about how the `value` attribute of a Node instance changes infinitesimally when one of the values of its parent Nodes does. This will be required for the reverse-mode AD algorithm, that works by traversing the DAG $[\boldsymbol{N}_1,\dots,\boldsymbol{N}_M]$ in reversed order, pairnf 
-
-a given DAG in reverse topologically sorted order $[\boldsymbol{N}_1,\dots,\boldsymbol{N}_M]$. The algorithm starts at one of the out-Nodes $\boldsymbol{N}_s\ (s \leq M)$ and stops until it reaches a root-Node. A reverse-mode automatic differentiator accumulates derivative data from Nodes that directly depend on each other (so called *local gradient data*) into *total gradients* of the form $\partial v_s/\partial v_i$. 
-
-
 
 All together, this describes the basic layout of a Node object:
 
@@ -79,6 +71,8 @@ mutable struct Node
 	end
 end
 ```
+
+### Example.
 
 
 
