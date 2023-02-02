@@ -38,7 +38,9 @@ Thus, when the AD algortihm reaches a Node, it has to know this Nodes parents, a
 
 ## Basic DAG construction
 
-The core idea is shared with popular ML libraries such as Tensorflow or PyTorch and relies on recording the performed computations that result in a particular DAG onto a "tape". The relevant data for each intermediate result will be stored in its own *Node* object `N`. The most basic information hold by such an object is its position on the tape `N.tpos`, and the numerical value `N.value` obtained from the computational step that led to the instanciation of the Node `N`. (The former is of the type `ID`, which is further explained in the **Node struct** section.) To enable graph traversation, we use a struct
+The core idea is shared with popular ML libraries such as Tensorflow or PyTorch and relies on recording the series of performed computations $f_1,\dots,f_n$ that result in a particular DAG onto a "tape", where the relevant data for each intermediate result produced by a step $f_i$ will be stored in its own *Node* object $\boldsymbol{N}$. The tape will be initialized with the *root-Nodes* representing the DAG inputs and a new Node is appended to the end of the tape whenever a step $f_i$ is performed. By construction, a tape is a topologically sorted list of the DAG vertices. Hence the DAG can traversed by a reverse-mode automatic differentiator 
+
+We will represent Nodes as (mutable) Julia structs. The most basic information hold by an instance `N` of the Node struct is the Node's position on the tape `N.tpos` and the numerical value `N.value` obtained from the computational step that led to the instanciation of the Node `N`. To enable graph traversation, we bundle parent information about a Node in the struct
 
 ```julia
 struct ParentData
@@ -47,14 +49,20 @@ struct ParentData
 end
 ```
 
-that lists the identifiers of the Nodes that where called by the computational step that led to `N` as well as how the `N.value` attribute changes infinitesimally when one of the values of the parent Nodes does. All together, this describes the basic layout of a Node object:
+Note that the `ParentData` struct also has an attribute `lgrads` which contains information about how the `value` attribute of a Node instance changes infinitesimally when one of the values of its parent Nodes does. This will be required for the reverse-mode AD algorithm, that works by traversing the DAG $[\boldsymbol{N}_1,\dots,\boldsymbol{N}_M]$ in reversed order, pairnf 
+
+a given DAG in reverse topologically sorted order $[\boldsymbol{N}_1,\dots,\boldsymbol{N}_M]$. The algorithm starts at one of the out-Nodes $\boldsymbol{N}_s\ (s \leq M)$ and stops until it reaches a root-Node. A reverse-mode automatic differentiator accumulates derivative data from Nodes that directly depend on each other (so called *local gradient data*) into *total gradients* of the form $\partial v_s/\partial v_i$. 
+
+
+
+All together, this describes the basic layout of a Node object:
 
 ```julia
 mutable struct Node
 
 	tpos::ID                     # tape position                 
 	value::Float64               # intermediate result of computational step
-        tgrad::Float64               # total gradient (set by 'autodiff')	
+        tgrad::Float64               # total gradient (overwritten by 'autodiff')	
 	pdata::ParentData            # parent information
 
 	function Node(value;
