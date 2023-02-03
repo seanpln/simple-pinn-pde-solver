@@ -105,15 +105,17 @@ In the file `node.jl` we provide Record-methods to track the feedforward swipe o
 
 ## AD
 
-A reverse-mode automatic differentiator works by traversing the DAG in reversed topologically sorted order and uses a `backprop!` method to send derivative data from the child Nodes to their parents.
+A reverse-mode automatic differentiator works by traversing the DAG in reversed topologically sorted order and backpropagating derivative data from the child Nodes to their parents.
 
 ```julia
-function autodiff!(record::Record, n_s::Int64; scale = 1.0) 
-	record.outtape[n_s].v̇ = scale
-	@inbounds for i = n_s:-1:1
-		node = record.outtape[i]
-		backprop!(node, record)
-		node.v̇ = 0.0
+function autodiff!(tape::Vector{Node},		# DAG 
+                  n_s::Int64			# index of 'seed Node'
+		  ) 
+	tape[n_s].tgrad = 1.0        		# set total gradient of the seed
+	# traverse the DAG
+	@inbounds for i = n_s:-1:1              
+		node = tape[i]			# grab Node from tape                  							
+		backprop!(node)                 # backpropagate derivative data to the Node's parents
 	end
 end
 ```
@@ -124,17 +126,44 @@ $$ \frac{d v_s}{d v_{\text{child}}}\frac{\partial v_{\text{child}}}{\partial v_{
 *from* the child nodes *to* the parents.
 
 ```julia
-function backprop!(node::Node, record::Record)
-  	@inbounds for i in eachindex(node.p.n)
-  		localgrad = node.p.x[i]
-		if localgrad != 0.0
-			contribution = node.v̇ * localgrad
-			parent       = findnode(node.p.n[i], record)
-			parent.v̇    += contribution  
-		end
+function backprop!(node::Node)
+  	@inbounds for i in eachindex(node.pdata)
+			parent         = node.pdata.tpos[i]
+			parent.tgrad  += node.tgrad * node.pdata.lgrads[i] 
 	end
 end
 ```
+The code requires some straight forward modifications of the `Node` struct. First, we endow the Nodes with a **total gradient** attribute `tgrad` which corresponds to the quantity $\frac{d v_s}{d v_i}$. This attribute will be initialized with zero and will be updated by the automatic differentiator. Second, the backpropagation requires the **local derivatives** $\frac{\partial v_{\text{child}}}{\partial v_{\text{parent}}}$ of a Node's value with respect to its parent Nodes values. We will bundle this with the parents tape positions in a struct
+
+```julia
+struct ParentData
+	tpos::Vector{ID}		  # tape positions of parents
+	lgrads::Vector{Float64}           # local gradients of parents (used by 'autodiff')
+end
+```
+Note that for some Node $N_i$ that results from some computational step $f$ and that has parents $N_{p_1},\dots,N_{p_r}$, the local gradients are given by the partial derivatives
+
+$$ \frac{\partial f}{\partial v_{p_j}}(v_{p_1},\dots,v_{p_r}) $$
+
+that can be hardcoded into the Record-step methods. For instance, we can track a bivariat multiplication with the Record-step method
+
+```julia
+function multiply!(node_1::Node, node_2::Node, tape::Vector{Node})
+	push!(tape, Node(tpos  = length(tape)+1,
+	                 value = node_1.value+node_2.value,
+			 pdata = ParentData([node_1.tpos, node_2.tpos],
+			                    [node_2.value, node_1.value]
+			                   )		 
+	                 )
+             )
+end
+```
+
+
+Note that if the Node $\boldsymbol{N}{i}$ has parents results from the computational step $f$ and has parents $\boldsymbol{N}_{p_1},dots,\boldsymbol{N}_{p_r}$
+
+The **local gradients** $\frac{\partial v_{\text{child}}}{\partial v_{\text{parent}}}$ are the partial derivatives of the computational step
+$f_i$ that
 
 
 To be more precise, let $\boldsymbol{N}_s$ be the selected output Node and $\boldsymbol{N}_i,\ i < s,$ a preceeding Node on the DAG $\boldsymbol{T}$. Then, according to the chain rule,
