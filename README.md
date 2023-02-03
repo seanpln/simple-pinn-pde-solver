@@ -38,7 +38,101 @@ Thus, when the AD algortihm reaches a Node, it has to know this Nodes parents, a
 
 ## Basic DAG construction
 
-The core idea is shared with popular ML libraries such as Tensorflow or PyTorch and relies on recording the series of performed computations $f_1,\dots,f_n$ that result in a particular DAG onto a "tape" $\boldsymbol{T}$, where the relevant data for each intermediate result produced by a step $f_i$ will be stored in its own *Node* object $\boldsymbol{N}$. The tape will be initialized with the *root-Nodes* representing the DAG inputs and a new Node is appended to the end of the tape whenever a step $f_i$ is performed. We will represent Nodes as (mutable) Julia structs. The most basic information hold by an instance `N` of the Node struct is the Node's position on the tape `N.tpos` and the numerical value `N.value` obtained from the computational step that led to the instanciation of the Node `N`.
+The core idea is shared with popular ML libraries such as Tensorflow or PyTorch and relies on recording the series of performed computations $f_1,\dots,f_n$ that result in a particular DAG onto a "tape" $\boldsymbol{T}$, where the relevant data for each intermediate result produced by a step $f_i$ will be stored in its own *Node* object $\boldsymbol{N}$. We will represent Nodes as (mutable) Julia structs. The most basic information hold by an instance `N` of the Node struct is the Node's position on the tape `N.tpos` and the numerical value `N.value` obtained from the computational step that led to the instanciation of the Node `N`.
+
+```julia
+mutable struct Node
+
+	tpos::Int64                  # tape position                 
+	value::Float64               # intermediate result of computational step	
+	pdata::Vector{Int64}         # parent information
+
+	function Node(;
+		      tpos   = (0,0,0,0),
+		      value  = 0.0
+		      pdata  = Int64[]              
+	             )
+		new(tpos, value, pdata)
+	end
+end
+```
+
+The general scheme for DAG construction is then the following
+
+1. Initialize a tape `t` that holds the root Nodes representing the computation inputs.
+2. For each computational step $f_i$, execute a corresponding **Record-step method** that appends a Node, which holds the computational data related to $f_i$, to `t`. 
+
+### Example.
+
+For every $(x,y) \in \mathbb{R}^2$, the computation $f(x,y) = (x+y)^2$ can be executed stepwise by first computing $f_1(x,y) = x+y$ and then $f_2(f_1) = f_1^2$. We will use the scheme above to construct the DAG corresponding to the computation $f$ with inputs $x=1.0$ and $y=2.0$.
+
+We first create the two input Nodes `x` and `y` with the desired values and initialize a tape `t` holding these Nodes.
+
+```julia
+x = Node(tpos=1, value=1.0)
+y = Node(tpos=2, value=2.0)
+t = [x, y]
+```
+
+The computational steps $f_1$ and $f_2$ will be recorded by means of corresponding Record-step methods.
+
+```julia
+function add!(node_1::Node, node_2::Node, tape::Vector{Node})
+	push!(tape, Node(tpos  = length(tape)+1,
+	                 value = node_1.value+node_2.value,
+			 pdata = [node_1.tpos, node_2.tpos]		 
+	                 )
+             )
+end
+
+function square!(node::Node, tape::Vector{Node})
+	push!(tape, Node(tpos  = length(tape)+1,
+	                 value = abs2(node.tpos),
+			 pdata = [node.tpos]			 
+	                 )
+             )
+end
+```
+
+In order to record the computation $f(1.0,2.0)$, we consecutively pass the tape `t` through the Record-step methods. Afterwards, the state of the variable `t` will represent the DAG that underlies the function evaluation $f(1.0,2.0)$.
+
+```julia
+add!(x, y, t)
+square!(last(t), t)
+```
+
+In the file `node.jl` we provide Record-methods to track the feedforward swipe of a multilayer perceptron $\Phi_\theta:\mathbb{R}^d\to\mathbb{R}$.
+
+## AD
+
+```julia
+function autodiff!(record::Record, n_s::Int64; scale = 1.0) 
+
+	record.outtape[n_s].v̇ = scale
+	@inbounds for i = n_s:-1:1
+		node = record.outtape[i]
+		backprop!(node, record)
+		node.v̇ = 0.0
+	end
+end
+
+function backprop!(node::Node, record::Record)
+
+  	@inbounds for i in eachindex(node.p.n)
+  	
+  		localgrad = node.p.x[i]
+	
+		if localgrad != 0.0
+			contribution = node.v̇ * localgrad
+			parent       = findnode(node.p.n[i], record)
+			parent.v̇    += contribution  
+		end
+	end
+end
+```
+
+
+
 
 By construction, a tape is a topologically sorted list of the DAG vertices. Hence the DAG can be traversed by a reverse-mode AD algorithm simply by looping over $\boldsymbol{T} = [\boldsymbol{N}_1,\dots,\boldsymbol{N}_M]$ in reversed order. Such an algorithm gets passed a Node $\boldsymbol{N}_s\ (s \leq M)$ and outputs all the (total) derivatives $\dot{v}_i \overset{\text{def}}{=} dv_s/dv_i,\ (i = 1,\dots,M)$, where $v_i$ is the value hold by Node $\boldsymbol{N}_i$. To achieve this, the algorithm exploits the chain rule to accumulate new total gradients from already computed ones by passing the quantities 
 
@@ -74,45 +168,7 @@ mutable struct Node
 end
 ```
 
-### Example.
 
-The computation $f(x,y) = (x+y)^2$ can be performed within the two steps $f_1(x,y) = x+y$ and, respectively, $f_2(f_1) = f_1^2$. We show how to construct the DAG corresponding to $f$ with inputs $x=1.0$ and $y=2.0$. To start with, we initialize a tape `t` with two root-Nodes, i.e.
-
-```julia
-x = Node(tpos=1, value=1.0)
-y = Node(tpos=2, value=2.0)
-t = [x, y]
-```
-
-Next, we append the Node `f_1`, representing the intermediate result from the first computational step, to the tape `t`.
-
-```julia
-f_1 = Node(tpos  = length(t)+1,
-	   value = x.value + y.value,
-	   pdata = ParentData([1, 2],
-			      [1.0, 1.0]
-	                     )
-          )
-push!(t, f_1)
-```
-
-We can automatize Node creation by means of a pre-defined "Record-step" method.
-
-```julia
-function square!(node::Node, tape::Vector{Node})
-	tpos  = length(t)+1
-	value = node.value
-	pdata = ParentData([node.tpos],
-	                   [2*node.value]
-	                  )
-	push!(tape, Node(tpos  = tpos,
-	                 value = value,
-			 pdata = pdata			 
-	                 )
-             )
-end
-square!(last(t), t)			  
-```
 
 We can then pass our tape `t` to a reverse-mode automatic differentiator in order to obtain the derivatives $\partial_xf(1,2)$ and $\partial_yf(1,2)$.
 
