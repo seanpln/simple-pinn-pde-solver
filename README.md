@@ -105,9 +105,50 @@ In the file `node.jl` we provide Record-methods to track the feedforward swipe o
 
 ## AD
 
+A reverse-mode automatic differentiator works by traversing the DAG in reversed topologically sorted order and uses a `backprop!` method to send derivative data from the child Nodes to their parents.
+
 ```julia
 function autodiff!(record::Record, n_s::Int64; scale = 1.0) 
+	record.outtape[n_s].v̇ = scale
+	@inbounds for i = n_s:-1:1
+		node = record.outtape[i]
+		backprop!(node, record)
+		node.v̇ = 0.0
+	end
+end
+```
+The `backprop!` method reads the parent data from the current Node selected by the AD algorithm and sends the quantities
 
+$$ \frac{d v_s}{d v_{\text{child}}}\frac{\partial v_{\text{child}}}{\partial v_{\text{parent}}}$$
+
+*from* the child nodes *to* the parents.
+
+```julia
+function backprop!(node::Node, record::Record)
+  	@inbounds for i in eachindex(node.p.n)
+  		localgrad = node.p.x[i]
+		if localgrad != 0.0
+			contribution = node.v̇ * localgrad
+			parent       = findnode(node.p.n[i], record)
+			parent.v̇    += contribution  
+		end
+	end
+end
+```
+
+
+To be more precise, let $\boldsymbol{N}_s$ be the selected output Node and $\boldsymbol{N}_i,\ i < s,$ a preceeding Node on the DAG $\boldsymbol{T}$. Then, according to the chain rule,
+
+$$ \frac{d v_s}{d v_i} = S_i \overset{\text{def}}{=} \sum_{j=1}^{p} { \frac{d v_s}{d v_{n_j}} \frac{\partial v_{n_j}}{\partial v_i}  }$$
+
+where $n_{1},\dots,n_{p}$ are the tape positions of the children of the Node $\boldsymbol{N}_i$ and $v_m$ denotes the value hold by the Node with tape position $m$. Note that we ommit arguments for simplicity. An automatic differentiator works by traversing a DAG in reversed topologically sorted order and "sending" the quantities
+
+$$ \frac{d v_s}{d v_{\text{child}}}\frac{\partial v_{\text{child}}}{\partial v_{\text{parent}}}$$
+
+*from* the child nodes *to* the parents. This way, the sums $S_i$ are accumulated term by term.
+
+```julia
+function autodiff!(record::Record, n_s::Int64; scale = 1.0) 
 	record.outtape[n_s].v̇ = scale
 	@inbounds for i = n_s:-1:1
 		node = record.outtape[i]
