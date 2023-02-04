@@ -238,11 +238,15 @@ function const2!(node::Node, tape::Vector{Node})
 end
 ```
 
-The AD-Recorder will use similar chains of Record-step methods to track the total gradient updates (Steps 2 and 3) performed by the AD algorithm. When a summand is added to a sum $S_{p_j}$, three Nodes are involved. 
+The AD-Recorder will use similar chains of Record-step methods to track the total gradient updates (Steps 2 and 3) performed by the AD algorithm. When a summand is added to a sum $S(p_j)$, three Nodes are involved. 
 
 1. The Node $\dot{\boldsymbol{N}_i}$ that resulted from completing the sum $S_i$ and hence represents the total gradient of $\boldsymbol{N}_i$.  
-2. The "local gradient Node" that is created when the AD-Recorder calls the function `n.gradfuns[j]`. This Node will be involved in the multiplication that yields the contribution to the sum $S_{p_j}$. 
-3. The Node $\dot{\boldsymbol{N}}_{p_j}$ that resulted from the most recent update of the sum $S_{p_j}$.  
+2. The "local gradient Node" that is created when the AD-Recorder calls the function `n.gradfuns[j]`. This Node will be involved in the multiplication that yields the contribution to the sum $S(p_j)$. 
+3. The Node $\dot{\boldsymbol{N}}_{p_j}$ that resulted from the most recent update of the sum $S(p_j)$. This Node will be passed to the `add!` operation together with the Node representing the total gradient contribution. 
+
+To keep track of where the Nodes that represent the most current states of the sums $S(i)$ sit on the tape $\boldsymbol{T}'$, we will add an attribute `tgradpos` to our `Node` struct. Whenever the `tgradval` (we formerly called this just `tgrad`) attribute of a Node $i$ is touched (and hence the sum $S(i)$ is updated), the attribute `tgradpos` will be set to the current length of the tape $\boldsymbol{T}'$.
+
+
 
 
 
