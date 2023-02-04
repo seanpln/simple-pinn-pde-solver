@@ -112,9 +112,9 @@ function autodiff!(tape::Vector{Node},		# DAG
                   n_s::Int64			# index of 'seed Node'
 		  ) 
 	tape[n_s].tgrad = 1.0        		# set total gradient of the seed
-	# traverse the DAG
+	# traverse the DAG in reverse order
 	@inbounds for i = n_s:-1:1              
-		node = tape[i]			# grab Node from tape                  							
+		node = tape[i]			                 							
 		backprop!(node)                 # backpropagate derivative data to the Node's parents
 	end
 end
@@ -151,7 +151,7 @@ where $f$ is the computational step recorded by means of the Node $\boldsymbol{N
 ```julia
 function multiply!(node_1::Node, node_2::Node, tape::Vector{Node})
 	push!(tape, Node(tpos  = length(tape)+1,
-	                 value = node_1.value+node_2.value,
+	                 value = node_1.value*node_2.value,
 			 pdata = ParentData([node_1.tpos, node_2.tpos],
 			                    [node_2.value, node_1.value]
 			                   )		 
@@ -164,22 +164,37 @@ In case you have never heard of reverse-mode AD, we recall that this works due t
 
 $$ \frac{d v_s}{d v_i} = S_i \overset{\text{def}}{=} \sum_{j=1}^{p} { \frac{d v_s}{d v_{n_j}} \frac{\partial v_{n_j}}{\partial v_i}  }$$
 
-where $n_{1},\dots,n_{p}$ are the tape positions of the *children* of the Node $i$. Note that we ommit arguments for simplicity. By traversing the DAG, a reverse-mode automatic differentiator accumulates the sums $S_i$ term by term. It can be shown by induction that whenever the algortihm picks a Node $i$ in the loop over the DAG, then the total gradient of this Node $d v_s/d v_i$ must have already been fully accumulated, making the contributions to the sums $S_{p_1},\dots,S_{p_r}$ by means of backpropagation valid. For the induction's base case $(i=s)$ note that $d v_s/d v_s = 1$, which corresponds to the line `tape[n_s].tgrad = 1.0` in the code for the `autodiff!` method.
+where $n_{1},\dots,n_{p}$ are the tape positions of the *children* of the Node $i$. Note that we ommit arguments for simplicity. By traversing the DAG, a reverse-mode automatic differentiator accumulates the sums $S_i$ term by term. It can be shown by induction that whenever the algorithm picks a Node $i$ in the loop over the DAG, then the total gradient of this Node $d v_s/d v_i$ must have already been fully accumulated, making the contributions to the sums $S_{p_1},\dots,S_{p_r}$ by means of backpropagation valid. For the induction's base case $(i=s)$ note that $d v_s/d v_s = 1$, which corresponds to the line `tape[n_s].tgrad = 1.0` in the code for the `autodiff!` method.
 
 
 ## AD Recording
 
 To obtain the DAG that corresponds to an expression of the form $D^{\boldsymbol{\alpha}}f(\boldsymbol{x})$, where $\boldsymbol{\alpha} \in \mathbb{N}^p$ is some multiindex, our idea is to repeatedly record the operations performed by the automatic differentiator itself. For instance, given some $\boldsymbol{x}\in\mathbb{R}^2$, say we want to construct the DAG that corresponds to the expression 
 
-$$ D^{(2,1)}f(\boldsymbol{x}) = \partial_{xxy}f(\boldsymbol{x}).$$
+$$ D^{(2,1)}f(\boldsymbol{x}) = \partial_{xxy}f(\boldsymbol{x})$$
 
-for some function $f:\mathbb{R}\to\mathbb{R}$. Then we can succeed as follows:
+for some function $f:\mathbb{R}^2\to\mathbb{R}$. Then we can succeed as follows:
 
 1. Construct the DAG of $f(\boldsymbol{x})$ in the form of a tape `t`.
-2. Feed the tape `t` into a reverse-mode AD algorithm and record the operations performed by this algorithm. This yields a tape `t_p` that contains in particular the Nodes `n_x` and `n_y` representing the quantities $\partial_{x}f(\boldsymbol{x})$ and, respectively $\partial_{y}f(\boldsymbol{x})$
-3. Feed the tape `t_p` into an automatic differentator with starting position `n_x.tpos` and again record its operations, yielding a tape `t_pp` which holds Nodes `n_xx` and `n_xy` that hold the derivative values $\partial_{xx}f(\boldsymbol{x})$ and, respectively $\partial_{xy}f(\boldsymbol{x})$.
-4. Finally, run the automatic differentiator with input tape `t_pp` and starting position `n_xx.tpos` which yields a tape `t_ppp`.
-5. Grab the Node `t_ppp[n_xxy.tpos]` and read its value. 
+2. Feed the tape `t` into a reverse-mode AD algorithm and record the operations it performs. This yields a tape `t_p` containing in particular the Nodes `n_x` and `n_y`, which represent the quantities $\partial_{x}f(\boldsymbol{x})$ and, respectively, $\partial_{y}f(\boldsymbol{x})$.
+3. Feed the tape `t_p` into an automatic differentator with starting position `n_x.tpos` and again record its operations, which results in a tape `t_pp`. The tape `t_pp` will hold Nodes `n_xx` and `n_xy`, where `n_xx.value` and, respectively, `n_xy.value` equal $\partial_{xx}f(\boldsymbol{x})$ and $\partial_{xy}f(\boldsymbol{x})$, respectively.
+6. Track the run of the automatic differentiator with input tape `t_pp` and starting position `n_xx.tpos` to obtain a tape `t_ppp`.
+7. On the tape `t_ppp`, locate the Node whose value matches $D^{(2,1)}f(\boldsymbol{x})$.
+
+In this section, we will discuss the implementation of this scheme.
+
+Let $\boldsymbol{T}$ contain the record data from some computation $f(\boldsymbol{x})$ and let $\boldsymbol{T}'$ denote the tape that will hold the data generated by the AD-Recorder. For each derivative data transmission from a Node $\boldsymbol{N}$ to one of its parents $\boldsymbol{N}_{p_j}$ that is done by the automatic differentator, three operations have to be taped onto $\boldsymbol{T}'$ by the AD-Recorder:
+
+1. Evaluating the expression $\partial f/\partial v_{p_j}(v_{p_1},\dots,v_{p_r})$ 
+2. Multiplying the result of Step 1 with the total gradient value hold by the Node $\boldsymbol{N}$.
+3. Adding the result of Step 2 to the total gradient value hold by the parent Node $\boldsymbol{N}_{p_j}$.
+
+
+
+
+
+
+
 
 
 
