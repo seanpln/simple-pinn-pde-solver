@@ -19,7 +19,7 @@ and parametrized by a set of weights and biases $\theta$ of a feedforwad neural 
 
 The model training is usually gradient based, which requires the expressions $\nabla_\theta \hat{ \mathcal{R} }$ in order to update parameters. These gradients can be computed with a sufficient efficiency by feeding the computational graph (DAG) that underlies $\hat{ \mathcal{R} }$ into a reverse-mode automatic differentiator. 
 
-### Example. 
+## Working example 
 
 Consider the Poisson problem
 
@@ -87,7 +87,7 @@ end
 
 function square!(node::Node, tape::Vector{Node})
 	push!(tape, Node(tpos  = length(tape)+1,
-	                 value = abs2(node.tpos),
+	                 value = abs2(node.value),
 			 pdata = [node.tpos]			 
 	                 )
              )
@@ -188,6 +188,64 @@ Let $\boldsymbol{T}$ contain the record data from some computation $f(\boldsymbo
 1. Evaluating the expression $\partial f/\partial v_{p_j}(v_{p_1},\dots,v_{p_r})$ 
 2. Multiplying the result of Step 1 with the total gradient value hold by the Node $\boldsymbol{N}$.
 3. Adding the result of Step 2 to the total gradient value hold by the parent Node $\boldsymbol{N}_{p_j}$.
+
+Note that although the expressions $\partial f/\partial v_{p_j}(v_{p_1},\dots,v_{p_r})$ are already evaluated when we perform the Record-step methods for DAG construction, these computations are *not* part of the computation represented by that DAG. The idea is to add function labels to the parent data, where these functions labels refer to a particular Record-Step method. When it sees such a label, the AD-Recorder can lookup, for instance, a dictionary to pick the corresponding function in order to perform the corresponding computational step itself, taping it to $\boldsymbol{T}'$. For our toy example, we will add an attribute `gradfun` which is of type `Vector{String}` to the `ParentData` struct, i.e.
+
+
+```julia
+struct ParentData
+	tpos::Vector{Int64}		  # tape positions of parents
+	lgrads::Vector{Float64}           # local gradient values of parents (used by 'autodiff')
+	gradfuns::Vector{String}          # local gradient functions (executed by 'adrecord')
+end
+```
+
+The `String` labels refer to and are set by Record-step methods. For example, the `square!` method, which records the computational step $f(x) = x^2$, will point to the Record-step method `times2!`, corresponding to $f$'s first derivative $f'(x) = 2x$. The latter will point to another method `const2`, implementing the record of $f''(x) = 2$. This chain ends when either a derivative will be zero or the required order of the derivative will be exceeded by the next function. We will indicate this with the label `"zero"`, which will tell the AD-Recorder to skip the function evaluation. (The latter is okay, since vanishing local gradients do not contribute to the sums $S_i$ and hence can be neglected for the DAG construction.)
+
+```julia
+# Record step method for the function f(x) = x^2
+function square!(node::Node, tape::Vector{Node})
+	push!(tape, Node(tpos  = length(tape)+1,
+	                 value = abs2(node.value),
+			 pdata = ParentData([node_1.tpos],
+			                    [2*node.value],
+					    ["times2"]
+			                   )		 
+	                 )
+             )
+end
+# Record step method for the function f'(x) = 2x
+function times2!(node::Node, tape::Vector{Node})
+	push!(tape, Node(tpos  = length(tape)+1,
+	                 value = 2.0*node.value,
+			 pdata = ParentData([node.tpos],
+			                    [2.0],
+					    ["const2"]
+			                   )		 
+	                 )
+             )
+end
+# Record step method for the function f''(x) = 2
+function const2!(node::Node, tape::Vector{Node})
+	push!(tape, Node(tpos  = length(tape)+1,
+	                 value = 2.0,
+			 pdata = ParentData([node.tpos],
+			                    [0.0],
+					    ["zero"]
+			                   )		 
+	                 )
+             )
+end
+```
+
+The AD-Recorder will use similar chains of Record-step methods to track the total gradient updates (Steps 2 and 3) performed by the AD algorithm. When a summand is added to a sum $S_{p_j}$, three Nodes are involved. 
+
+1. The Node $\dot{\boldsymbol{N}_i}$ that resulted from completing the sum $S_i$ and hence represents the total gradient of $\boldsymbol{N}_i$.  
+2. The "local gradient Node" that is created when the AD-Recorder calls the function `n.gradfuns[j]`. This Node will be involved in the multiplication that yields the contribution to the sum $S_{p_j}$. 
+3. The Node $\dot{\boldsymbol{N}}_{p_j}$ that resulted from the most recent update of the sum $S_{p_j}$.  
+
+
+
 
 
 
