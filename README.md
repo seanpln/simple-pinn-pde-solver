@@ -245,15 +245,21 @@ The AD-Recorder will use similar chains of Record-step methods to track the tota
 3. The Node $\dot{\boldsymbol{N}}_{p_j}$ that resulted from the most recent update of the sum $S(p_j)$. This Node will be passed to the `add!` operation together with the Node representing the total gradient contribution. 
 
 ```julia
-function backward!(node::Node, record::Record, outtape::Vector{Node})
-	tg_node = outtape[node.ṅ]
-	for i in eachindex(node.p.n)
-		n_i = node.p.n[i]
-		g_i = node.p.g[i]
-		if g_i > 0
-			lg_node = record_lg_node!(g_i, node.p.n, record, outtape)
-			parent  = findnode(n_i, record)
-			contribute!(tg_node, lg_node, parent, outtape)   
+function record_backprop!(node::Node, record::Record, outtape::Vector{Node})
+	tg_node = outtape[node.tgradpos]
+	# loop over parents of 'node'
+	for j in eachindex(node.pdata.tpos)
+		# tape position of j-th parent of 'node'
+		p_j = node.pdata.tpos[j]
+		# label of 'node.value' partial derivative w.r.t. j-th parent value
+		g_j = node.pdata.gradfuns[j]    
+		if g_j != "zero"
+			# evaluate derivative function
+			lg_node = record_lg_node!(g_j, node.pdata.tpos, tape, tape_p) 
+			# j-th parent of 'node'
+			p_node  = findnode(n_i, tape)
+			# record computation of contribution and track parent's total gradient update
+			contribute!(tg_node, lg_node, p_node, tape_p)          
 		end
 	end	
 end
@@ -262,7 +268,7 @@ end
 To keep track of where the Nodes that represent the most current states of the sums $S(i)$ sit on the tape $\boldsymbol{T}'$, we will add an attribute `tgradpos` to our `Node` struct. Whenever the `tgradval` (we formerly called this just `tgrad`) attribute of a Node $i$ is touched (and hence the sum $S(i)$ is updated), the attribute `tgradpos` will be set to the current length of the tape $\boldsymbol{T}'$.
 
 ```julia
-function ad_record(tape:Vector{Node} n_s::Int64)
+function record_ad(tape:Vector{Node} n_s::Int64)
 	resetpos!(tape)
 	seed_tg_node  = Node(value=1.0, tpos=n_s)   
 	tape_p        = vcat(intape[1:n_s-1], [ṡ])
@@ -272,32 +278,11 @@ function ad_record(tape:Vector{Node} n_s::Int64)
 	# 'playback' of the intape
 	for i = n_s:-1:1	
 		node = tape[i]
+		# skip 'off path' Nodes
 		if node.tgradpos != 0			
-			push!(invalid, i)		
-		else
 		        backward!(node)
 		end
 	end
-	
-	valid = setdiff(collect(n_s:-1:1), invalid)	
-	return tape_p, valid	
-endO
+	return tape_p	
+end
 ```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
