@@ -297,10 +297,10 @@ y = Node(tpos=2, value=2.0)
 t = record_f([x, y])
 # record the automatic differentiation operating on the tape 't'
 t_p = record_ad(t, last(t))
-# choose seed node for first order AD record (yielding second order derivatives)
+# choose seed node for second AD record 
 n_x = t_p[x.tgradpos]
 # record the automatic differentiation operating on the tape 't_p' with seed 'n_x'
-t_pp = record_ad(t, n_x)
+t_pp = record_ad(t_p, n_x)
 # run automatic differentiator on second order tape `t_pp` to obtain third order derivatives
 autodiff!(t_pp)
 # read total gradient value from root Node
