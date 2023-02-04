@@ -101,7 +101,27 @@ add!(x, y, t)
 square!(last(t), t)
 ```
 
+The more convenient approach is to define a method that bundles the record of these computations in advance.
+
+```julia
+function record_f(root_1::Node, root2::Node)
+	tape = [root_1, root_2]
+	add!(root_1, root_2, tape)
+	square!(last(tape), tape)
+	return tape
+end	
+```
+
+Then we can record the computation $f(1.0,2.0)$ by means of 
+
+```julia
+x = Node(tpos=1, value=1.0)
+y = Node(tpos=2, value=2.0)
+t = record_f(x, y)
+```
+
 In the file `node.jl` we provide Record-methods to track the feedforward swipe of a multilayer perceptron $\Phi_\theta:\mathbb{R}^d\to\mathbb{R}$.
+
 
 ## AD
 
@@ -306,4 +326,6 @@ autodiff!(t_pp)
 # read total gradient value from root Node
 f_xxy = y.tgradvalue
 ```
+
+The complete code for this toy example can be found in the file `toyexample.jl`
 
