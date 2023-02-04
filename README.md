@@ -286,3 +286,24 @@ function record_ad(tape:Vector{Node} n_s::Int64)
 	return tape_p	
 end
 ```
+
+### Example
+
+```julia
+# define root Nodes representing the computation's inputs
+x = Node(tpos=1, value=1.0)
+y = Node(tpos=2, value=2.0)
+# record the computation 
+t = record_f([x, y])
+# record the automatic differentiation operating on the tape 't'
+t_p = record_ad(t, last(t))
+# choose seed node for first order AD record (yielding second order derivatives)
+n_x = t_p[x.tgradpos]
+# record the automatic differentiation operating on the tape 't_p' with seed 'n_x'
+t_pp = record_ad(t, n_x)
+# run automatic differentiator on second order tape `t_pp` to obtain third order derivatives
+autodiff!(t_pp)
+# read total gradient value from root Node
+f_xxy = y.tgradvalue
+```
+
