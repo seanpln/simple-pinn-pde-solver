@@ -21,16 +21,185 @@ The model training is usually gradient based, which requires the expressions $\n
 
 ## Working example 
 
-Consider the Poisson problem
+On the unit square, consider the Poisson problem
 
 $$
 \begin{cases}
-\mathcal{F}[u] = f & \text{on } \Omega\\
-\mathcal{B}[u] = g & \text{on } \partial{\Omega},\\
+\Delta u = f & \text{on } (0,1)^2\\
+u = g & \text{on } \partial (0,1)^2,\\
 \end{cases}
 $$
 
-blablabla
+with source-term
+
+$$ f(x,y) = e^{-x}(x-2+y^3+6y)$$
+
+and Dirichlet boundary conditions 
+
+$$ g(0,y) = y^3,\ g(1,y) = (1+y^3)e^{-1},\ g(x,0) = xe^{-x},\ g(x,1) = (x+1)e^{-1}$$
+
+First, we load all the modules of our code.
+
+```julia
+include("node.jl") 		 
+include("parameters.jl")     	 
+include("neograd.jl")            
+include("nn.jl")    
+```
+
+### 1. Construct computational graphs
+
+Next, we construct the DAG corresponding to the feedforward swipe of the neural network $\Phi_\theta$. The DAG roots will be on the one hand the input neurons $x$ and $y$ and on the other hand the networks weights and biases $\theta$. We will use a network with two hidden layers, each stacking 20 neurons.
+
+```julia
+# Nodes for input neurons
+x  = Node(value=0.0, tpos = (1,0,1,0)) 	     
+y  = Node(value=0.0, tpos = (1,0,2,0))	 
+# Nodes for network parameters
+layers = [2,20,20,1]
+θ      = Parameters(layers)
+```
+
+We can record the feedforward swipe of $\Phi_\theta(x,y)$ using the `record_ff` method. The vector `activations` holds the Nodes representing the neuron activations. We can access the computation's output Nodes by looking up the `derivatives` attribute (the output of a function itself corresponds to the value of the zeroth derivative), we will require the positions of these Nodes in order to construct the DAGs for the higher order derivatives.
+
+```julia
+t_0, activations = ff_record([x, y], θ)  	        
+Φ_pos = getpos(t_0.derivatives[1]) 
+```
+```julia
+t_1 = ad_record(t_0, Φ_pos)                             	
+Φx_pos = getpos(t_1.derivatives[1])                       	
+Φy_pos = getpos(t_1.derivatives[2]) 				  
+```
+
+```julia
+T2x = ad_record(T1, Φx_pos)                            		
+T2y = ad_record(T1, Φy_pos) 
+```
+
+### 2. Define methods for gradient computation
+
+```julia
+records = RecordCollection(t_0, activations, [t_1, t_2_x, t_2_y]) 
+```
+
+```julia
+function add_∇R_res!(records::RecordCollection, 
+                     samples::Vector{Tuple{Float64,Float64}}
+                    )
+	x = records.activations[1][1]
+	y = records.activations[1][2]
+	N = length(samples)
+
+	Φxx  = records.adrecords[2].derivatives[1]
+	Φyy  = records.adrecords[3].derivatives[2]
+	
+	loss = 0.0
+
+	@inbounds for (xi,yi) in samples
+		# use samples as DAG inputs
+		setvalue!(x, xi)
+		setvalue!(y, yi)
+		# create new DAGs
+		update_records!(records)
+		f  = exp(-xi)*(xi-2+yi^3+6*yi)
+		ΔΦ = Φxx.v + Φyy.v
+		# report loss
+		loss += (1/N)*0.5*abs2(ΔΦ - f)
+		# outer derivative
+		∇out = (1/N) * (ΔΦ - f)
+		# add per sample gradient to ∇θ_s
+	        autodiff!(records.adrecords[2], Φxx.n[3], scale=∇out)
+	        autodiff!(records.adrecords[3], Φyy.n[3], scale=∇out)
+	end	
+	return loss
+end
+
+function add_∇R_bdr!(srecords::RecordCollection, 
+		     crecords::RecordCollection,
+		     training_sets::SampleCollection
+                    )
+	x  = srecords.activations[1][1]
+	y  = srecords.activations[1][2]
+	yc = crecords.activations[1][1]
+	
+	N = length(training_sets.Γr)
+
+	Φ  = srecords.ffrecord.derivatives[1]
+	Φc = crecords.ffrecord.derivatives[1]
+		
+	loss = 0.0 
+	# left boundary samples
+	@inbounds for (xi,yi) in training_sets.Γl
+		setvalue!(x,  xi)
+		setvalue!(y,  yi)
+		setvalue!(yc, yi)
+		# create new DAGs
+		overwrite_ffrecord!(srecords.ffrecord, srecords.activations)
+		overwrite_ffrecord!(crecords.ffrecord, crecords.activations)
+		# boundary control
+		g  = Φc.v
+		# report loss
+		loss += (1/N)*0.5*abs2(Φ.v - g)
+		# outer derivative
+		∇out = (1/N) * (Φ.v - g)
+		# add per sample gradient to ∇θ_s
+	        autodiff!(srecords.ffrecord, Φ.n[3],  scale=∇out)
+	        # add per sample gradient to ∇θ_c
+	        autodiff!(crecords.ffrecord, Φc.n[3], scale=-∇out)
+	end
+	# top boundary samples
+	@inbounds for (xi,yi) in training_sets.Γt
+		setvalue!(x, xi)
+		setvalue!(y, yi)
+		# create new DAGs
+		overwrite_ffrecord!(srecords.ffrecord, srecords.activations)
+		# boundary condition
+		g  = exp(-xi)*(xi+1)
+		# report loss
+		loss += (1/N)*0.5*abs2(Φ.v - g)
+		# outer derivative
+		∇out = (1/N) * (Φ.v - g)
+		# add per sample gradient to ∇θ_s
+	        autodiff!(srecords.ffrecord, Φ.n[3], scale=∇out)
+	end
+	# right boundary samples
+	@inbounds for (xi,yi) in training_sets.Γr
+		setvalue!(x, xi)
+		setvalue!(y, yi)
+		# create new DAGs
+		overwrite_ffrecord!(srecords.ffrecord, srecords.activations)
+		# boundary condition
+		g  = (1+yi^3)*exp(-1)
+		# report loss
+		loss += (1/N)*0.5*abs2(Φ.v - g)
+		# outer derivative
+		∇out = (1/N) * (Φ.v - g)
+		# add per sample gradient to ∇θ_s
+	     autodiff!(srecords.ffrecord, Φ.n[3], scale=∇out)
+	end
+	# bottom boundary samples
+	@inbounds for (xi,yi) in training_sets.Γb
+		setvalue!(x, xi)
+		setvalue!(y, yi)
+		# create new DAGs
+		overwrite_ffrecord!(srecords.ffrecord, srecords.activations)
+		# boundary condition
+		g  = xi*exp(-xi)
+		# report loss
+		loss += (1/N)*0.5*abs2(Φ.v - g)
+		# outer derivative
+		∇out = (1/N) * (Φ.v - g)
+		# add per sample gradient to ∇θ_s
+	        autodiff!(srecords.ffrecord, Φ.n[3], scale=∇out)
+	end	
+	return loss
+end
+```
+
+### Set up Adam optimizer
+
+
 
 
 
