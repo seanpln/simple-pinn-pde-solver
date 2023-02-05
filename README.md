@@ -1,6 +1,6 @@
 # simple-pinn-pde-solver
 
-## The PINN method
+## 1. The PINN method
 
 A PINN solver works by training a surrogate model $\Psi$ for the state $u:\overline{\Omega} \subset \mathbb{R}^d \to \mathbb{R}$ of a system
 
@@ -19,7 +19,7 @@ and parametrized by a set of weights and biases $\theta$ of a feedforwad neural 
 
 The model training is usually gradient based, which requires the expressions $\nabla_\theta \hat{ \mathcal{R} }$ in order to update parameters. These gradients can be computed with a sufficient efficiency by feeding the computational graph (DAG) that underlies $\hat{ \mathcal{R} }$ into a reverse-mode automatic differentiator. 
 
-## Working example 
+## 2. Working example 
 
 For a minimal working example, consider the bvp
 
@@ -33,7 +33,7 @@ $$
 
 whose exact solution is given as $u(x) = 5\sin(2x+1)$.
  
-### 1. Constructing the DAGs
+### 2.1. Constructing the DAGs
 
 After defining the root Nodes, we use the `record_ff` method for tracking the feedforward swipe of a Glorot-initialized neural network $\Phi_\theta$ with two hidden layers, each stacking 20 neurons.
 
@@ -83,7 +83,7 @@ with respect to the weight $w^3_{1,2}$ that connects neuron #1 of layer 3 with n
 θ.weights[2][1,2].tgradvalue
 ```
 
-### 2. Defining methods for gradient computation
+### 2.2. Defining methods for gradient computation
 
 The gradients for both the residual and the boundary component of the empirical risk function is a sum of "per sample" gradients over the training data. For instance
 
@@ -136,7 +136,7 @@ function addgrad_bdrloss!(records::RecordCollection, samples::Vector{Float64})
 end
 ```
 
-### Fitting the model
+### 2.3. Fitting the model
 
 We will feed the gradient data into the popular Adam optimizer[^1] to update the parameters. After the gradients have been fully accumulated in terms of the two methods `addgrad_resloss!` and `addgrad_resloss!`, the Adam algorithm performs the following update of the parameter values:
 
@@ -206,7 +206,11 @@ function adamstep!(θ::ParameterNodes, t::Int64)
 end
 ```
 
-## Basic DAG construction
+### 2.4. Model validation
+
+## 3. Details about DAG construction 
+
+### 3.1. Basic DAG construction
 
 The core idea is shared with popular ML libraries such as Tensorflow or PyTorch and relies on recording the series of performed computations $f_1,\dots,f_n$ that result in a particular DAG onto a "tape" $\boldsymbol{T}$, where the relevant data for each intermediate result produced by a step $f_i$ will be stored in its own *Node* object $\boldsymbol{N}$. We will represent Nodes as (mutable) Julia structs. The most basic information hold by an instance `N` of the Node struct is the Node's position on the tape `N.tpos` and the numerical value `N.value` obtained from the computational step that led to the instanciation of the Node `N`.
 
@@ -293,7 +297,7 @@ t = record_f(x, y)
 In the file `node.jl` we provide Record-methods to track the feedforward swipe of a multilayer perceptron $\Phi_\theta:\mathbb{R}^d\to\mathbb{R}$.
 
 
-## AD
+### 3.2. Reverse-mode AD
 
 A reverse-mode automatic differentiator works by traversing the DAG in reversed topologically sorted order, backpropagating derivative data from the child Nodes to their parents. We use generic "textbook code" to implement this as
 
@@ -357,7 +361,7 @@ $$ \frac{d v_s}{d v_i} = S_i \overset{\text{def}}{=} \sum_{j=1}^{p} { \frac{d v_
 where $n_{1},\dots,n_{p}$ are the tape positions of the *children* of the Node $i$. Note that we ommit arguments for simplicity. By traversing the DAG, a reverse-mode automatic differentiator accumulates the sums $S_i$ term by term. It can be shown by induction that whenever the algorithm picks a Node $i$ in the loop over the DAG, then the total gradient of this Node $d v_s/d v_i$ must have already been fully accumulated, making the contributions to the sums $S_{p_1},\dots,S_{p_r}$ by means of backpropagation valid. For the induction's base case $(i=s)$ note that $d v_s/d v_s = 1$, which corresponds to the line `tape[n_s].tgrad = 1.0` in the code for the `autodiff!` method.
 
 
-## AD Recording
+### 3.3. AD Recording
 
 To obtain the DAG that corresponds to an expression of the form $D^{\boldsymbol{\alpha}}f(\boldsymbol{x})$, where $\boldsymbol{\alpha} \in \mathbb{N}^p$ is some multiindex, our idea is to repeatedly record the operations performed by the automatic differentiator itself. For instance, given some $\boldsymbol{x}\in\mathbb{R}^2$, say we want to construct the DAG that corresponds to the expression 
 
@@ -477,7 +481,7 @@ function record_ad(tape:Vector{Node} n_s::Int64)
 end
 ```
 
-### Example
+### 3.4. Example
 
 ```julia
 # define root Nodes representing the computation's inputs
@@ -496,6 +500,3 @@ autodiff!(t_pp)
 # read total gradient value from root Node
 f_xxy = y.tgradvalue
 ```
-
-The complete code for this toy example can be found in the file `toyexample.jl`
-
