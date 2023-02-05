@@ -33,7 +33,7 @@ $$
 
 whose exact solution is given as $u(x) = 5\sin(2x+1)$.
  
-### 1. Construct computational graphs
+### 1. Constructing the DAGs
 
 After defining the root Nodes, we use the `record_ff` method for tracking the feedforward swipe of a Glorot-initialized neural network $\Phi_\theta$ with two hidden layers, each stacking 20 neurons.
 
@@ -83,7 +83,7 @@ with respect to the weight $w^3_{1,2}$ that connects neuron #1 of layer 3 with n
 θ.weights[2][1,2].tgradvalue
 ```
 
-### 2. Define methods for gradient computation
+### 2. Defining methods for gradient computation
 
 The gradients for both the residual and the boundary component of the empirical risk function is a sum of "per sample" gradients over the training data. For instance
 
@@ -136,7 +136,7 @@ function addgrad_bdrloss!(records::RecordCollection, samples::Vector{Float64})
 end
 ```
 
-### Set up Adam optimizer
+### Fitting the model
 
 We will feed the gradient data into the popular Adam optimizer[^1] to update the parameters. After the gradients have been fully accumulated in terms of the two methods `addgrad_resloss!` and `addgrad_resloss!`, the Adam algorithm performs the following update of the parameter values:
 
@@ -190,7 +190,6 @@ function fit!(records::RecordCollection,
 		adamstep!(records.ffrecord.θ, epoch)
 	end
 	return res_losses, bdr_losses
-	
 end
 
 function adamstep!(θ::ParameterNodes, t::Int64)
@@ -198,10 +197,10 @@ function adamstep!(θ::ParameterNodes, t::Int64)
 # and performs an 'adam_update!' for each such Node.
         @inbounds for l in eachindex(θ.weights)
         	@inbounds for i in eachindex(θ.weights[l])
-			parameter_update!(θ.weights[l][i], t)
+			adam_update!(θ.weights[l][i], t)
 		end
 		@inbounds for i in eachindex(θ.biases[l])
-			parameter_update!(θ.biases[l][i], t)
+			adam_update!(θ.biases[l][i], t)
 		end
 	end
 end
