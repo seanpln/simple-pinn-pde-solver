@@ -39,11 +39,10 @@ After defining the root Nodes, we use the `record_ff` method for tracking the fe
 
 ```julia
 # Nodes for input neurons.
-x = Node(value=0.0, tpos=(1,0,1,0)) 	     
-y = Node(value=0.0, tpos=(1,0,2,0))	 
+x = Node(value=0.0, tpos=(1,0,1,0)) 	     	 
 # Nodes for network parameters.
 # We will use a network with two 20-neuron hidden layers.
-layers = [2,20,20,1]
+layers = [1,20,20,1]
 θ      = Parameters(layers)
 # Obtain record data from tracking the network's feedforward swipe.
 ff_rec, activations = record_ff([x, y], θ) 
@@ -67,7 +66,7 @@ Note that instead passing the seed Node itself, we just tell the AD-Recorder whe
 Φx       = ad_rec_1.derivatives[1]
 ad_rec_2 = record_ad(ad_rec_1, getpos(Φx))
 ```
-Finally, if we wanted to compute the parameter gradient $\nabla_\theta\Phi_\theta''(0.0,0.0)$, we can simply run 
+Finally, if we wanted to compute the parameter gradient $\nabla_\theta\Phi_\theta''(0.0)$, we can simply run 
 
 ```julia
 Φxx = ad_rec_2.derivatives[1]
@@ -76,21 +75,26 @@ autodiff!(ad_rec_2, getpos(Φxx))
 
 and look up the `tgradvalue` attributes of the Nodes in `θ`. For instance, to get the partial derivative 
 
-$$ \frac{\partial}{\partial w^2_{1,2}}\Phi_\theta'(0.0,0.0)$$
+$$ \frac{\partial}{\partial w^2_{1,2}}\Phi_\theta''(0.0)$$
 
-with respect to the weight $ w^2_{1,2}$ that connects neuron #1 of layer 2 with neuron #2 of the input layer, we can type
+with respect to the weight $w^3_{1,2}$ that connects neuron #1 of layer 3 with neuron #2 of the input layer, we can type
 
 ```julia
-θ.weights[1][1,2].tgradvalue
+θ.weights[2][1,2].tgradvalue
 ```
 
 
-
-### 2. Define methods for gradient computation
 
 ```julia
 records = RecordCollection(t_0, activations, [t_1, t_2_x, t_2_y]) 
 ```
+
+
+### 2. Define methods for gradient computation
+
+The gradients for both the residual and the boundary component of the empirical risk function is a sum of "per sample" gradients over the training data. For instance
+
+$$ \hat{\mathcal{R}}_\text{res} = \sum_{i=1}^{N_\text{res}}{\nabla_\theta \frac{1}{2}(\Phi_\theta''(x_i) - f(x_i)^2)}$$
 
 ```julia
 function addgrad_resloss!(records::RecordCollection, samples::Vector{Float64})
