@@ -49,13 +49,17 @@ include("nn.jl")
 
 ### 1. Construct computational graphs
 
-Next, we construct the DAG corresponding to the feedforward swipe of the neural network $\Phi_\theta$. The DAG roots will be on the one hand the input neurons $x$ and $y$ and on the other hand the networks weights and biases $\theta$. We will use a network with two hidden layers, each stacking 20 neurons.
+We start with the construction of the DAG that corresponds to the feedforward swipe of the neural network $\Phi_\theta$. There will be two kinds of DAG root Nodes:
+
+1. Nodes that represent the input neurons of the neural network. 
+2. Nodes representing the network's weights and biases $\theta$.
 
 ```julia
-# Nodes for input neurons
-x  = Node(value=0.0, tpos = (1,0,1,0)) 	     
-y  = Node(value=0.0, tpos = (1,0,2,0))	 
-# Nodes for network parameters
+# Nodes for input neurons.
+x = Node(value=0.0, tpos=(1,0,1,0)) 	     
+y = Node(value=0.0, tpos=(1,0,2,0))	 
+# Nodes for network parameters.
+# We will use a network with two 20-neuron hidden layers.
 layers = [2,20,20,1]
 θ      = Parameters(layers)
 ```
@@ -63,18 +67,14 @@ layers = [2,20,20,1]
 We can record the feedforward swipe of $\Phi_\theta(x,y)$ using the `record_ff` method. The vector `activations` holds the Nodes representing the neuron activations. We can access the computation's output Nodes by looking up the `derivatives` attribute (the output of a function itself corresponds to the value of the zeroth derivative), we will require the positions of these Nodes in order to construct the DAGs for the higher order derivatives.
 
 ```julia
-t_0, activations = ff_record([x, y], θ)  	        
-Φ_pos = getpos(t_0.derivatives[1]) 
+ff_rec, activations = record_ff([x, y], θ)  	        
+Φ_pos = getpos(ff_rec.derivatives[1]) 
 ```
 ```julia
-t_1 = ad_record(t_0, Φ_pos)                             	
-Φx_pos = getpos(t_1.derivatives[1])                       	
-Φy_pos = getpos(t_1.derivatives[2]) 				  
-```
+ad_rec_1 = record_ad(ff_rec, Φ_pos)                             	
+Φx_pos   = getpos(ad_rec_1.derivatives[1])   
 
-```julia
-T2x = ad_record(T1, Φx_pos)                            		
-T2y = ad_record(T1, Φy_pos) 
+ad_rec_2 = record_ad(ad_rec_1, Φx_pos)
 ```
 
 ### 2. Define methods for gradient computation
@@ -84,120 +84,125 @@ records = RecordCollection(t_0, activations, [t_1, t_2_x, t_2_y])
 ```
 
 ```julia
-function add_∇R_res!(records::RecordCollection, 
-                     samples::Vector{Tuple{Float64,Float64}}
-                    )
-	x = records.activations[1][1]
-	y = records.activations[1][2]
-	N = length(samples)
-
-	Φxx  = records.adrecords[2].derivatives[1]
-	Φyy  = records.adrecords[3].derivatives[2]
-	
+function addgrad_resloss!(records::RecordCollection, samples::Vector{Float64})
+	x   = records.activations[1][1]
+	Φxx = records.adrecords[2].derivatives[1]
 	loss = 0.0
-
-	@inbounds for (xi,yi) in samples
-		# use samples as DAG inputs
+	N = length(samples)
+	@inbounds for xi in samples
+		# Use current sample as DAG input.
 		setvalue!(x, xi)
-		setvalue!(y, yi)
-		# create new DAGs
+		# Update DAG with new input value.
 		update_records!(records)
-		f  = exp(-xi)*(xi-2+yi^3+6*yi)
-		ΔΦ = Φxx.v + Φyy.v
-		# report loss
+		# Use selected derivative Nodes to obtain F[Φ](xi).
+		ΔΦ = Φxx.value
+		# Evaluate source term with current sample.
+		f  = -20*sin(2*xi+1)
+		# Incorporate sample loss into total residual loss.
 		loss += (1/N)*0.5*abs2(ΔΦ - f)
-		# outer derivative
-		∇out = (1/N) * (ΔΦ - f)
-		# add per sample gradient to ∇θ_s
-	        autodiff!(records.adrecords[2], Φxx.n[3], scale=∇out)
-	        autodiff!(records.adrecords[3], Φyy.n[3], scale=∇out)
-	end	
+		# Add the sample gradient to the total gradient.
+	        autodiff!(records.adrecords[2], getpos(Φxx), scale=(1/N)*(ΔΦ - f))
+	end
+	# Report current total residual loss
 	return loss
 end
 
-function add_∇R_bdr!(srecords::RecordCollection, 
-		     crecords::RecordCollection,
-		     training_sets::SampleCollection
-                    )
-	x  = srecords.activations[1][1]
-	y  = srecords.activations[1][2]
-	yc = crecords.activations[1][1]
-	
-	N = length(training_sets.Γr)
-
-	Φ  = srecords.ffrecord.derivatives[1]
-	Φc = crecords.ffrecord.derivatives[1]
-		
-	loss = 0.0 
-	# left boundary samples
-	@inbounds for (xi,yi) in training_sets.Γl
-		setvalue!(x,  xi)
-		setvalue!(y,  yi)
-		setvalue!(yc, yi)
-		# create new DAGs
-		overwrite_ffrecord!(srecords.ffrecord, srecords.activations)
-		overwrite_ffrecord!(crecords.ffrecord, crecords.activations)
-		# boundary control
-		g  = Φc.v
-		# report loss
-		loss += (1/N)*0.5*abs2(Φ.v - g)
-		# outer derivative
-		∇out = (1/N) * (Φ.v - g)
-		# add per sample gradient to ∇θ_s
-	        autodiff!(srecords.ffrecord, Φ.n[3],  scale=∇out)
-	        # add per sample gradient to ∇θ_c
-	        autodiff!(crecords.ffrecord, Φc.n[3], scale=-∇out)
-	end
-	# top boundary samples
-	@inbounds for (xi,yi) in training_sets.Γt
+function addgrad_bdrloss!(records::RecordCollection, samples::Vector{Float64})
+	x = records.activations[1][1]
+	Φ = records.ffrecord.derivatives[1]
+	N = length(samples)
+	@inbounds for xi in samples
+		# Use current sample as DAG input.
 		setvalue!(x, xi)
-		setvalue!(y, yi)
-		# create new DAGs
-		overwrite_ffrecord!(srecords.ffrecord, srecords.activations)
-		# boundary condition
-		g  = exp(-xi)*(xi+1)
-		# report loss
-		loss += (1/N)*0.5*abs2(Φ.v - g)
-		# outer derivative
-		∇out = (1/N) * (Φ.v - g)
-		# add per sample gradient to ∇θ_s
-	        autodiff!(srecords.ffrecord, Φ.n[3], scale=∇out)
+		# Update DAG with new input value. 
+		# (Only the DAG from tracking the feedforwad is required.)
+		update_ffrecord(records.ffrecord)
+		# Evaluate boundary function with current sample.
+		g = (xi == 0.0 ? 5*sin(1) : 5*sin(3))
+		# Report sample loss.
+		loss += (1/N)*0.5*abs2(Φ.value - g)
+		# Add the sample gradient to the total gradient.
+	        autodiff!(records.ffrecord, getpos(Φ), scale=(1/N)*(Φ.value - g))
 	end
-	# right boundary samples
-	@inbounds for (xi,yi) in training_sets.Γr
-		setvalue!(x, xi)
-		setvalue!(y, yi)
-		# create new DAGs
-		overwrite_ffrecord!(srecords.ffrecord, srecords.activations)
-		# boundary condition
-		g  = (1+yi^3)*exp(-1)
-		# report loss
-		loss += (1/N)*0.5*abs2(Φ.v - g)
-		# outer derivative
-		∇out = (1/N) * (Φ.v - g)
-		# add per sample gradient to ∇θ_s
-	     autodiff!(srecords.ffrecord, Φ.n[3], scale=∇out)
-	end
-	# bottom boundary samples
-	@inbounds for (xi,yi) in training_sets.Γb
-		setvalue!(x, xi)
-		setvalue!(y, yi)
-		# create new DAGs
-		overwrite_ffrecord!(srecords.ffrecord, srecords.activations)
-		# boundary condition
-		g  = xi*exp(-xi)
-		# report loss
-		loss += (1/N)*0.5*abs2(Φ.v - g)
-		# outer derivative
-		∇out = (1/N) * (Φ.v - g)
-		# add per sample gradient to ∇θ_s
-	        autodiff!(srecords.ffrecord, Φ.n[3], scale=∇out)
-	end	
+	# Report current total residual loss
 	return loss
 end
 ```
 
 ### Set up Adam optimizer
+
+```julia
+function adam!(srecords::RecordCollection, crecords::RecordCollection,
+               training_sets::SampleCollection,
+               nbr_epochs::Int64
+              )  
+	
+	# uncomment for loss record
+	res_losses = Float64[]
+	bdr_losses = Float64[]
+	obs_losses = Float64[]
+	
+
+	θ_s = srecords.ffrecord.θ
+	θ_c = crecords.ffrecord.θ
+	
+	epochs = ProgressBar(1:nbr_epochs)
+	
+	@inbounds for epoch in epochs
+
+		#Ω_batch = shuffle!(training_sets.Ω)[1:1000]	
+		Ω_batch = training_sets.Ω
+
+		loss_res = add_∇R_res!(srecords, Ω_batch)
+		loss_bdr = add_∇R_bdr!(srecords, crecords, training_sets)
+		loss_obs = add_∇R_obs!(srecords, Ω_batch)
+		
+		# uncomment for loss record
+		push!(res_losses, loss_res)
+		push!(bdr_losses, loss_bdr)
+		push!(obs_losses, loss_obs)
+		
+
+		set_description(epochs, string(@sprintf("R̂_res: %.5f, R̂_bdr: %.5f, R̂_obs: %.5f", loss_res, loss_bdr, loss_obs)))
+		adamstep!(θ_s, epoch)
+		adamstep!(θ_c, epoch)
+	end
+	# uncomment for loss record
+	return res_losses, bdr_losses, obs_losses
+	
+end
+
+function adamstep!(θ::ParameterNodes, t::Int64)
+
+        @inbounds for l in eachindex(θ.weights)
+        
+        	@inbounds for i in eachindex(θ.weights[l])
+			parameter_update!(θ.weights[l][i], t)
+		end
+		
+		@inbounds for i in eachindex(θ.biases[l])
+			parameter_update!(θ.biases[l][i], t)
+		end
+	end
+end
+
+function parameter_update!(nd::Node, t::Int64)
+	α   = 0.01
+	β_1 = 0.99
+	β_2 = 0.999
+	ε   = 10^(-9)
+	# update moments
+	nd.mt = β_1*nd.mt + (1-β_1)*nd.v̇ 	
+	nd.vt = β_2*nd.vt + (1-β_2)*abs2(nd.v̇)
+	# bias correction
+	nd.m̂ = nd.mt / (1-β_1^t) 
+	nd.v̂ = nd.vt / (1-β_2^t)
+	# update parameter
+	nd.v -= α*nd.m̂/(sqrt(nd.v̂) + ε) 
+	# reset gradient
+	nd.v̇ = 0.0 
+end
+```
 
 
 
