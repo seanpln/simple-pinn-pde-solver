@@ -49,18 +49,42 @@ layers = [2,20,20,1]
 ff_rec, activations = record_ff([x, y], θ) 
 ```
 
-We can record the feedforward swipe of $\Phi_\theta(x,y)$ using the `record_ff` method. The vector `activations` holds the Nodes representing the neuron activations. We can access the computation's output Nodes by looking up the `derivatives` attribute (the output of a function itself corresponds to the value of the zeroth derivative), we will require the positions of these Nodes in order to construct the DAGs for the higher order derivatives.
+The output Nodes from any record will be contained in an attribute we call `derivatives`. In particular, the value $\Phi_\theta(0.0,0.0)$ is the "zeroth derivative" of the neural network with respect to its inputs $x$ and $y$. Hence, we can grab the Node representing the value $\Phi_\theta(0.0,0.0)$ by
+
+```julia  	        
+Φ = ff_rec.derivatives[1] 
+```
+
+Next, we will use an **AD-Recorder** to record the operations performed by a reverse-mode AD algorithm that operates on the DAG corresponding to the expression $\Phi_\theta(0.0,0.0)$, using the Node that holds the final value of this computation (`Φ` in the code below) as the AD seed. )
 
 ```julia
-ff_rec, activations = record_ff([x, y], θ)  	        
-Φ_pos = getpos(ff_rec.derivatives[1]) 
+ad_rec_1 = record_ad(ff_rec, getpos(Φ)) 
 ```
-```julia
-ad_rec_1 = record_ad(ff_rec, Φ_pos)                             	
-Φx_pos   = getpos(ad_rec_1.derivatives[1])   
 
-ad_rec_2 = record_ad(ad_rec_1, Φx_pos)
+Note that instead passing the seed Node itself, we just tell the AD-Recorder where to find it on the input DAG by means of its tape position. As we want to obtain the DAG corresponding to $\Phi_\theta''(0.0,0.0)$, we prepare another AD-Record. This time, the automatic differentiator will run on the DAG corresponding to the expression $\Phi_\theta'(0.0,0.0)$, whose output Node serves as the AD seed.
+
+```julia  	        
+Φx       = ad_rec_1.derivatives[1]
+ad_rec_2 = record_ad(ad_rec_1, getpos(Φx))
 ```
+Finally, if we wanted to compute the parameter gradient $\nabla_\theta\Phi_\theta''(0.0,0.0)$, we can simply run 
+
+```julia
+Φxx = ad_rec_2.derivatives[1]
+autodiff!(ad_rec_2, getpos(Φxx))
+```
+
+and look up the `tgradvalue` attributes of the Nodes in `θ`. For instance, to get the partial derivative 
+
+$$ \frac{\partial}{\partial w^2_{1,2}}\Phi_\theta'(0.0,0.0)$$
+
+with respect to the weight $ w^2_{1,2}$ that connects neuron #1 of layer 2 with neuron #2 of the input layer, we can type
+
+```julia
+θ.weights[1][1,2].tgradvalue
+```
+
+
 
 ### 2. Define methods for gradient computation
 
