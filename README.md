@@ -21,38 +21,21 @@ The model training is usually gradient based, which requires the expressions $\n
 
 ## Working example 
 
-On the unit square, consider the Poisson problem
+For a minimal working example, consider the bvp
 
 $$
 \begin{cases}
-\Delta u = f & \text{on } (0,1)^2\\
-u = g & \text{on } \partial (0,1)^2,\\
+u''(x) = -20\sin(2x+1), & x \in (0,1),\\
+u(0) = 5\sin(1),\\
+u(1) = 5\sin(3),\\
 \end{cases}
 $$
 
-with source-term
-
-$$ f(x,y) = e^{-x}(x-2+y^3+6y)$$
-
-and Dirichlet boundary conditions 
-
-$$ g(0,y) = y^3,\ g(1,y) = (1+y^3)e^{-1},\ g(x,0) = xe^{-x},\ g(x,1) = (x+1)e^{-1}$$
-
-First, we load all the modules of our code.
-
-```julia
-include("node.jl") 		 
-include("parameters.jl")     	 
-include("neograd.jl")            
-include("nn.jl")    
-```
-
+whose exact solution is given as $u(x) = 5\sin(2x+1)$.
+ 
 ### 1. Construct computational graphs
 
-We start with the construction of the DAG that corresponds to the feedforward swipe of the neural network $\Phi_\theta$. There will be two kinds of DAG root Nodes:
-
-1. Nodes that represent the input neurons of the neural network. 
-2. Nodes representing the network's weights and biases $\theta$.
+After defining the root Nodes, we use the `record_ff` method for tracking the feedforward swipe of a Glorot-initialized neural network $\Phi_\theta$ with two hidden layers, each stacking 20 neurons.
 
 ```julia
 # Nodes for input neurons.
@@ -62,6 +45,8 @@ y = Node(value=0.0, tpos=(1,0,2,0))
 # We will use a network with two 20-neuron hidden layers.
 layers = [2,20,20,1]
 θ      = Parameters(layers)
+# Obtain record data from tracking the network's feedforward swipe.
+ff_rec, activations = record_ff([x, y], θ) 
 ```
 
 We can record the feedforward swipe of $\Phi_\theta(x,y)$ using the `record_ff` method. The vector `activations` holds the Nodes representing the neuron activations. We can access the computation's output Nodes by looking up the `derivatives` attribute (the output of a function itself corresponds to the value of the zeroth derivative), we will require the positions of these Nodes in order to construct the DAGs for the higher order derivatives.
@@ -132,75 +117,50 @@ end
 ### Set up Adam optimizer
 
 ```julia
-function adam!(srecords::RecordCollection, crecords::RecordCollection,
-               training_sets::SampleCollection,
+function adam!(records::RecordCollection, 
+               res_samples::Vector{Float64},
+	       bdr_samples::Vector{Float64},
                nbr_epochs::Int64
               )  
-	
-	# uncomment for loss record
 	res_losses = Float64[]
-	bdr_losses = Float64[]
-	obs_losses = Float64[]
-	
-
-	θ_s = srecords.ffrecord.θ
-	θ_c = crecords.ffrecord.θ
-	
-	epochs = ProgressBar(1:nbr_epochs)
-	
-	@inbounds for epoch in epochs
-
-		#Ω_batch = shuffle!(training_sets.Ω)[1:1000]	
-		Ω_batch = training_sets.Ω
-
-		loss_res = add_∇R_res!(srecords, Ω_batch)
-		loss_bdr = add_∇R_bdr!(srecords, crecords, training_sets)
-		loss_obs = add_∇R_obs!(srecords, Ω_batch)
-		
-		# uncomment for loss record
-		push!(res_losses, loss_res)
-		push!(bdr_losses, loss_bdr)
-		push!(obs_losses, loss_obs)
-		
-
-		set_description(epochs, string(@sprintf("R̂_res: %.5f, R̂_bdr: %.5f, R̂_obs: %.5f", loss_res, loss_bdr, loss_obs)))
-		adamstep!(θ_s, epoch)
-		adamstep!(θ_c, epoch)
+	bdr_losses = Float64[]	
+	@inbounds for epoch = 1:nbr_epochs
+		res_loss = addgrad_resloss!(records, res_samples)
+		bdr_loss = addgrad_bdrloss!(records, bdr_samples)
+		push!(res_losses, res_loss)
+		push!(bdr_losses, bdr_loss)
+		adamstep!(records.ffrecord.θ, epoch)
 	end
-	# uncomment for loss record
-	return res_losses, bdr_losses, obs_losses
+	return res_losses, bdr_losses
 	
 end
 
 function adamstep!(θ::ParameterNodes, t::Int64)
-
         @inbounds for l in eachindex(θ.weights)
-        
         	@inbounds for i in eachindex(θ.weights[l])
 			parameter_update!(θ.weights[l][i], t)
 		end
-		
 		@inbounds for i in eachindex(θ.biases[l])
 			parameter_update!(θ.biases[l][i], t)
 		end
 	end
 end
 
-function parameter_update!(nd::Node, t::Int64)
+function parameter_update!(node::Node, t::Int64)
 	α   = 0.01
 	β_1 = 0.99
 	β_2 = 0.999
 	ε   = 10^(-9)
 	# update moments
-	nd.mt = β_1*nd.mt + (1-β_1)*nd.v̇ 	
-	nd.vt = β_2*nd.vt + (1-β_2)*abs2(nd.v̇)
+	node.mt = β_1*nd.mt + (1-β_1)*node.tgradvalue	
+	node.vt = β_2*nd.vt + (1-β_2)*abs2(node.tgradvalue)
 	# bias correction
-	nd.m̂ = nd.mt / (1-β_1^t) 
-	nd.v̂ = nd.vt / (1-β_2^t)
+	node.mhat = nd.mt / (1-β_1^t) 
+	node.vhat = nd.vt / (1-β_2^t)
 	# update parameter
-	nd.v -= α*nd.m̂/(sqrt(nd.v̂) + ε) 
+	node.value -= α*node.m̂hat/(sqrt(node.v̂hat) + ε) 
 	# reset gradient
-	nd.v̇ = 0.0 
+	node.tgradvalue = 0.0 
 end
 ```
 
