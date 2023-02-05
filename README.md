@@ -89,62 +89,97 @@ The gradients for both the residual and the boundary component of the empirical 
 
 $$ \hat{\mathcal{R}}_\text{res} = \sum_{i=1}^{N_\text{res}}{\nabla_\theta \frac{1}{2}(\Phi_\theta''(x_i) - f(x_i))^2} = \sum_{i=1}^{N_\text{res}}{(\Phi_\theta''(x_i) - f(x_i))\nabla_\theta}\Phi_\theta''(x_i)$$
 
-According to what has already been written, this sum can be computed by looping over the training data, obtain the DAGs $\Phi_\theta''(x_i)$ and feed them into the `autodiff` method. The latter can be scaled in order to incorporate outer derivatives. The following code implements this for our minimal working example. It is important to note that instead of creating new DAGs each time, we overwrite existing ones to recycle memory (and hence avoid memory allocation)
+According to what has already been written, this sum can be computed by looping over the training data, obtaining the DAGs $\Phi_\theta''(x_i)$ and feeding them into the `autodiff` method. The latter can be scaled in order to incorporate outer derivatives. The following code implements this for our minimal working example. It is important to note that instead of creating new DAGs each time, we overwrite existing ones to recycle memory (and hence avoid memory allocation).
 
 ```julia
 function addgrad_resloss!(records::RecordCollection, samples::Vector{Float64})
-	x   = records.activations[1][1]
-	Φxx = records.adrecords[2].derivatives[1]
+	# Pick input Node.
+	x    = records.activations[1][1]
+	# Pick Node representing the required network derivative.
+	Φxx  = records.adrecords[2].derivatives[1]
+	# Initialize loss value to be reported.
 	loss = 0.0
-	N = length(samples)
+	# The Number of training samples will be required for proper scaling.
+	N    = length(samples)
+	# Loop over the traing samples
 	@inbounds for xi in samples
 		# Use current sample as DAG input.
 		setvalue!(x, xi)
 		# Update DAG with new input value.
 		update_records!(records)
-		# Use selected derivative Nodes to obtain F[Φ](xi).
+		# Use selected derivative Nodes to obtain the number Φ''(xi).
 		ΔΦ = Φxx.value
 		# Evaluate source term with current sample.
 		f  = -20*sin(2*xi+1)
-		# Incorporate sample loss into total residual loss.
+		# Add sample loss to total residual loss.
 		loss += (1/N)*0.5*abs2(ΔΦ - f)
 		# Add the sample gradient to the total gradient.
 	        autodiff!(records.adrecords[2], getpos(Φxx), scale=(1/N)*(ΔΦ - f))
 	end
-	# Report current total residual loss
+	# Report residual loss for current set of parameters.
 	return loss
 end
 
+# Similar for the boundary loss:
 function addgrad_bdrloss!(records::RecordCollection, samples::Vector{Float64})
 	x = records.activations[1][1]
 	Φ = records.ffrecord.derivatives[1]
 	N = length(samples)
 	@inbounds for xi in samples
-		# Use current sample as DAG input.
 		setvalue!(x, xi)
-		# Update DAG with new input value. 
-		# (Only the DAG from tracking the feedforwad is required.)
 		update_ffrecord(records.ffrecord)
-		# Evaluate boundary function with current sample.
 		g = (xi == 0.0 ? 5*sin(1) : 5*sin(3))
-		# Report sample loss.
 		loss += (1/N)*0.5*abs2(Φ.value - g)
-		# Add the sample gradient to the total gradient.
 	        autodiff!(records.ffrecord, getpos(Φ), scale=(1/N)*(Φ.value - g))
 	end
-	# Report current total residual loss
 	return loss
 end
 ```
 
 ### Set up Adam optimizer
 
+We will feed the gradient data into the popular Adam optimizer[^1] to update the parameters. After the gradients have been fully accumulated in terms of the two methods `addgrad_resloss!` and `addgrad_resloss!`, the Adam algorithm performs the following update of the parameter values:
+
+[^1]:  https://doi.org/10.48550/arXiv.1412.6980
+
 ```julia
-function adam!(records::RecordCollection, 
-               res_samples::Vector{Float64},
-	       bdr_samples::Vector{Float64},
-               nbr_epochs::Int64
-              )  
+function adam_update!(node::Node, t::Int64)
+	# Hyperparameters as suggested by the creators of Adam.
+	α   = 0.01
+	β_1 = 0.99
+	β_2 = 0.999
+	ε   = 10^(-9)
+	# Following the instructions given in the original Adam paper ...
+	# ... update moments
+	node.mt = β_1*nd.mt + (1-β_1)*node.tgradvalue	     
+	node.vt = β_2*nd.vt + (1-β_2)*abs2(node.tgradvalue)  
+	# ... bias correction
+	node.mhat = nd.mt / (1-β_1^t) 
+	node.vhat = nd.vt / (1-β_2^t)
+	# ... update parameters
+	node.value -= α*node.m̂hat/(sqrt(node.v̂hat) + ε) 
+	# Resetting gradients. They will be freshly accumulated  
+	# for the next descent step.
+	node.tgradvalue = 0.0 
+end
+```
+
+Finally, we can sample the training data and fit our model $\Phi_\theta$.
+
+```julia
+res_samples = collect(0.01:0.01:0.99)
+bdr_samples = [0.0, 1.0]
+fit!(records, res_samples, bdr_samples, 10000)
+```
+
+The latter works by repeatedly computing the gradients and using them by applying the `adam_update!` to each and every parameter.  
+
+```julia
+function fit!(records::RecordCollection, 
+             res_samples::Vector{Float64},
+	     bdr_samples::Vector{Float64},
+             nbr_epochs::Int64
+             )  
 	res_losses = Float64[]
 	bdr_losses = Float64[]	
 	@inbounds for epoch = 1:nbr_epochs
@@ -159,6 +194,8 @@ function adam!(records::RecordCollection,
 end
 
 function adamstep!(θ::ParameterNodes, t::Int64)
+# This methods simply loops through the whole set of parameter Nodes
+# and performs an 'adam_update!' for each such Node.
         @inbounds for l in eachindex(θ.weights)
         	@inbounds for i in eachindex(θ.weights[l])
 			parameter_update!(θ.weights[l][i], t)
@@ -168,30 +205,7 @@ function adamstep!(θ::ParameterNodes, t::Int64)
 		end
 	end
 end
-
-function parameter_update!(node::Node, t::Int64)
-	α   = 0.01
-	β_1 = 0.99
-	β_2 = 0.999
-	ε   = 10^(-9)
-	# update moments
-	node.mt = β_1*nd.mt + (1-β_1)*node.tgradvalue	
-	node.vt = β_2*nd.vt + (1-β_2)*abs2(node.tgradvalue)
-	# bias correction
-	node.mhat = nd.mt / (1-β_1^t) 
-	node.vhat = nd.vt / (1-β_2^t)
-	# update parameter
-	node.value -= α*node.m̂hat/(sqrt(node.v̂hat) + ε) 
-	# reset gradient
-	node.tgradvalue = 0.0 
-end
 ```
-
-
-
-
-
-Thus, when the AD algortihm reaches a Node, it has to know this Nodes parents, as well as the local gradient data.
 
 ## Basic DAG construction
 
