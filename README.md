@@ -48,19 +48,19 @@ layers = [1,20,20,1]
 ff_rec, activations = record_ff([x, y], θ) 
 ```
 
-The output Nodes from any record will be contained in an attribute we call `derivatives`. In particular, the value $\Phi_\theta(0.0,0.0)$ is the "zeroth derivative" of the neural network with respect to its inputs $x$ and $y$. Hence, we can grab the Node representing the value $\Phi_\theta(0.0,0.0)$ by
+The output Nodes from any record will be contained in an attribute we call `derivatives`. In particular, the value $\Phi_\theta(0.0)$ is the "zeroth derivative" of the neural network with respect to its input $x$. Hence, we can grab the Node representing the value $\Phi_\theta(0.0)$ by
 
 ```julia  	        
 Φ = ff_rec.derivatives[1] 
 ```
 
-Next, we will use an **AD-Recorder** to record the operations performed by a reverse-mode AD algorithm that operates on the DAG corresponding to the expression $\Phi_\theta(0.0,0.0)$, using the Node that holds the final value of this computation (`Φ` in the code below) as the AD seed. )
+Next, we will use an **AD-Recorder** to record the operations performed by a reverse-mode AD algorithm that operates on the DAG corresponding to the expression $\Phi_\theta(0.0)$, using the Node that holds the final value of this computation (`Φ` in the code below) as the AD seed. )
 
 ```julia
 ad_rec_1 = record_ad(ff_rec, getpos(Φ)) 
 ```
 
-Note that instead passing the seed Node itself, we just tell the AD-Recorder where to find it on the input DAG by means of its tape position. As we want to obtain the DAG corresponding to $\Phi_\theta''(0.0,0.0)$, we prepare another AD-Record. This time, the automatic differentiator will run on the DAG corresponding to the expression $\Phi_\theta'(0.0,0.0)$, whose output Node serves as the AD seed.
+Note that instead passing the seed Node itself, we just tell the AD-Recorder where to find it on the input DAG by means of its tape position. As we want to obtain the DAG corresponding to $\Phi_\theta''(0.0)$, we prepare another AD-Record. This time, the automatic differentiator will run on the DAG corresponding to the expression $\Phi_\theta'(0.0)$, whose output Node serves as the AD seed.
 
 ```julia  	        
 Φx       = ad_rec_1.derivatives[1]
@@ -83,18 +83,13 @@ with respect to the weight $w^3_{1,2}$ that connects neuron #1 of layer 3 with n
 θ.weights[2][1,2].tgradvalue
 ```
 
-
-
-```julia
-records = RecordCollection(t_0, activations, [t_1, t_2_x, t_2_y]) 
-```
-
-
 ### 2. Define methods for gradient computation
 
 The gradients for both the residual and the boundary component of the empirical risk function is a sum of "per sample" gradients over the training data. For instance
 
-$$ \hat{\mathcal{R}}_\text{res} = \sum_{i=1}^{N_\text{res}}{\nabla_\theta \frac{1}{2}(\Phi_\theta''(x_i) - f(x_i)^2)}$$
+$$ \hat{\mathcal{R}}_\text{res} = \sum_{i=1}^{N_\text{res}}{\nabla_\theta \frac{1}{2}(\Phi_\theta''(x_i) - f(x_i))^2} = \sum_{i=1}^{N_\text{res}}{(\Phi_\theta''(x_i) - f(x_i))\nabla_\theta}\Phi_\theta''(x_i)$$
+
+According to what has already been written, this sum can be computed by looping over the training data, obtain the DAGs $\Phi_\theta''(x_i)$ and feed them into the `autodiff` method. The latter can be scaled in order to incorporate outer derivatives. The following code implements this for our minimal working example. It is important to note that instead of creating new DAGs each time, we overwrite existing ones to recycle memory (and hence avoid memory allocation)
 
 ```julia
 function addgrad_resloss!(records::RecordCollection, samples::Vector{Float64})
