@@ -15,13 +15,17 @@ whose right hand side data $(f,g)$ is assumed to be sufficiently regular such th
 
 $$\Psi_{\theta}(\boldsymbol{x}) = A(\boldsymbol{x}) + B(\boldsymbol{x})\Phi_{\theta}(\boldsymbol{x})$$
 
-and parametrized by a set of weights and biases $\theta$ of a feedforwad neural network $\Phi_{\theta}$ (the "PINN"). One can either try to find fitting functions $A,B:\overline{\Omega} \to \mathbb{R}$ that achieve $\mathcal{B}[\Psi_\theta] = g$ and hence lead to a model that matches the boundary conditions exactly, or incorporate a boundary term such as in the loss function that determines the model's empirical risk. (In the latter case one sets $A \equiv 0$ and $B \equiv 1$.) 
+and parametrized by a set of weights and biases $\theta$ of a feedforwad neural network $\Phi_{\theta}$ (the "PINN"). One can either try to find fitting functions $A,B:\overline{\Omega} \to \mathbb{R}$ that achieve $\mathcal{B}[\Psi_\theta] = g$ and hence lead to a model that matches the boundary conditions exactly, or incorporate a boundary term in the loss function that determines the model's empirical risk $\hat{\mathcal{R}}$. In the latter case, a common choice is
 
-The model training is usually gradient based, which requires the expressions $\nabla_\theta \hat{ \mathcal{R} }$ in order to update parameters. These gradients can be computed with a sufficient efficiency by feeding the computational graph (DAG) that underlies $\hat{ \mathcal{R} }$ into a reverse-mode automatic differentiator. 
+$$ \hat{\mathcal{R}}[\theta] = \frac{\lambda_\text{res}}{N_\text{res}}\sum_{i=1}^{N_\text{res}}{\frac{1}{2}(\mathcal{F}\[\Phi_{\theta}\](\boldsymbol{x}_i)-f(\boldsymbol{x}_i))^2} +  \frac{\lambda_\text{bdr}}{N_\text{bdr}}\sum_{i=1}^{N_\text{bdr}}{\frac{1}{2}(\mathcal{B}\[\Phi_{\theta}\](\boldsymbol{x}_i)-g(\boldsymbol{x}_i))^2}$$
+
+which is a sum of weighted MSEs over training samples. (Note that when we work with a boundary component, we set $A = 1$ and $B = 0$, i.e. $\Psi_{\theta} = \Phi_{\theta}$.)
+
+The model fitting is gradient based and requires the expressions $\nabla_\theta \hat{ \mathcal{R} }$ in order to update parameters. These gradients can be computed with a sufficient efficiency by feeding the computational graph (DAG) that underlies $\hat{ \mathcal{R} }$ into a reverse-mode automatic differentiation (AD) algorithm.
 
 ## 2. Working example 
 
-For a minimal working example, consider the bvp
+For a minimal working example, consider the following Poisson problem with Dirichlet boundary conditions
 
 $$
 \begin{cases}
@@ -35,16 +39,34 @@ whose exact solution is given as $u(x) = 5\sin(2x+1)$.
  
 ### 2.1. Constructing the DAGs
 
-After defining the root Nodes, we use the `record_ff` method for tracking the feedforward swipe of a Glorot-initialized neural network $\Phi_\theta$ with two hidden layers, each stacking 20 neurons.
+We require
+
+```julia
+include("node.jl")
+include("parameters.jl")
+```
+to define the root Nodes for a fully connected feedforward neural network.
 
 ```julia
 # Nodes for input neurons.
-x = Node(value=0.0, tpos=(1,0,1,0)) 	     	 
+x = Node(value=0.0, tpos=TapePosition(class=1, position=1)) 	     	 
 # Nodes for network parameters.
-# We will use a network with two 20-neuron hidden layers.
-layers = [1,20,20,1]
+# We will use a network with two 10-neuron hidden layers.
+layers = [1,10,10,1]
 θ      = Parameters(layers)
-# Obtain record data from tracking the network's feedforward swipe.
+```
+
+After defining the root Nodes, we add the non-root Nodes by recording all the operations that are required to obtain the expression $\Phi_\theta''(0.0)$. For this, we use the code from
+
+```julia
+include("activation_function.jl")
+include("record_steps.jl")
+include("record.jl")
+```
+
+The first "portion" of the DAG representing $\Phi_\theta''(0.0)$ comes from tracking the feedforward swipe of the neural network, i.e. the computation $\Phi_\theta(0.0)$.
+
+```julia
 ff_rec, activations = record_ff([x, y], θ) 
 ```
 
@@ -54,36 +76,50 @@ The output Nodes from any record will be contained in an attribute we call `deri
 Φ = ff_rec.derivatives[1] 
 ```
 
-Next, we will use an **AD-Recorder** to record the operations performed by a reverse-mode AD algorithm that operates on the DAG corresponding to the expression $\Phi_\theta(0.0)$, using the Node that holds the final value of this computation (`Φ` in the code below) as the AD seed. )
+Next, we use an **AD-Recorder** to record the operations performed by a reverse-mode AD algorithm that operates on the DAG corresponding to the expression $\Phi_\theta(0.0)$ and that uses the Node `Φ`, which holds the output of the neural network, as the AD seed. Note that instead of passing the seed Node itself, we tell the AD-Recorder where to find it on the input DAG by means of its tape position.
 
 ```julia
-ad_rec_1 = record_ad(ff_rec, getpos(Φ)) 
+ad_rec_1 = record_ad(ff_rec, Φ.tpos.position) 
 ```
 
-Note that instead passing the seed Node itself, we just tell the AD-Recorder where to find it on the input DAG by means of its tape position. As we want to obtain the DAG corresponding to $\Phi_\theta''(0.0)$, we prepare another AD-Record. This time, the automatic differentiator will run on the DAG corresponding to the expression $\Phi_\theta'(0.0)$, whose output Node serves as the AD seed.
+As we want to obtain the DAG corresponding to $\Phi_\theta''(0.0)$, we prepare another AD-Record. This time, the automatic differentiator will run on the DAG corresponding to the expression $\Phi_\theta'(0.0)$, whose output Node `Φx` serves as the AD seed.  
 
 ```julia  	        
 Φx       = ad_rec_1.derivatives[1]
 ad_rec_2 = record_ad(ad_rec_1, getpos(Φx))
 ```
-Finally, if we wanted to compute the parameter gradient $\nabla_\theta\Phi_\theta''(0.0)$, we can simply run 
 
-```julia
-Φxx = ad_rec_2.derivatives[1]
-autodiff!(ad_rec_2, getpos(Φxx))
+We remark that if we had used a neural network with, say, three inputs $x,y$ and $z$, we could grab, for instance, the Node representing the derivative $\partial_z\Phi_\theta(x,y,z)$ with this line of code:
+
+```julia  	        
+Φz = ad_rec_1.derivatives[3]
 ```
 
-and look up the `tgradvalue` attributes of the Nodes in `θ`. For instance, to get the partial derivative 
+The parameter gradient $\nabla_\theta\Phi_\theta''(0.0)$ can now be obtained from 
+
+```julia
+include("autodiff.jl")
+Φxx = ad_rec_2.derivatives[1]
+autodiff!(ad_rec_2, Φxx.tpos.position)
+```
+
+Here, the `autodiff!` method writes the gradients of the seed Node `Φxx` with respect to every other Node's value in the DAG into the corresponding Node's `tgradval` attribute. For instance, to get the partial derivative 
 
 $$ \frac{\partial}{\partial w^2_{1,2}}\Phi_\theta''(0.0)$$
 
 with respect to the weight $w^3_{1,2}$ that connects neuron #1 of layer 3 with neuron #2 of the input layer, we can type
 
 ```julia
-θ.weights[2][1,2].tgradvalue
+θ.weights[2][1,2].tgradval
 ```
 
-### 2.2. Defining methods for gradient computation
+Now that we have constructed the DAG, we bundle the complete set of record data into a `RecordCollection` to be conveniently accessible for the construction of the empirical risk gradients. 
+
+```julia
+records = RecordCollection(ff_rec, activations, [ad_rec_1, ad_rec_2])
+```
+
+### 2.2. Defining methods for the computation of the empirical risk gradients.
 
 The gradients for both the residual and the boundary component of the empirical risk function is a sum of "per sample" gradients over the training data. For instance
 
