@@ -157,7 +157,8 @@ bdr_samples = [0.0, 1.0]
 fit!(records, res_samples, bdr_samples, 10000)
 ```
 
-![losses](https://user-images.githubusercontent.com/124056760/217240421-9d126aee-39ba-46e6-be32-4bee41cbd19a.png)
+![losses](https://user-images.githubusercontent.com/124056760/217243091-9435be29-7c5d-4c62-80ae-76ec9262607d.png)
+
 
 The latter works by repeatedly computing the gradients and using them by applying the `adam_update!` to each and every parameter.  
 
@@ -194,6 +195,8 @@ end
 ```
 
 ### 2.4. Model validation
+
+![validation](https://user-images.githubusercontent.com/124056760/217243111-8ce5e1ed-cd58-4062-a13b-2b8ad7cfd35f.png)
 
 ## 3. Details about DAG construction 
 
