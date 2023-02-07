@@ -119,21 +119,6 @@ function addgrad_resloss!(records::RecordCollection, samples::Vector{Float64})
 	# Report residual loss for current set of parameters.
 	return loss
 end
-
-# Similar for the boundary loss:
-function addgrad_bdrloss!(records::RecordCollection, samples::Vector{Float64})
-	x = records.activations[1][1]
-	Φ = records.ffrecord.derivatives[1]
-	N = length(samples)
-	@inbounds for xi in samples
-		setvalue!(x, xi)
-		update_ffrecord(records.ffrecord)
-		g = (xi == 0.0 ? 5*sin(1) : 5*sin(3))
-		loss += (1/N)*0.5*abs2(Φ.value - g)
-	        autodiff!(records.ffrecord, getpos(Φ), scale=(1/N)*(Φ.value - g))
-	end
-	return loss
-end
 ```
 
 ### 2.3. Fitting the model
@@ -171,6 +156,8 @@ res_samples = collect(0.01:0.01:0.99)
 bdr_samples = [0.0, 1.0]
 fit!(records, res_samples, bdr_samples, 10000)
 ```
+
+![losses](https://user-images.githubusercontent.com/124056760/217240421-9d126aee-39ba-46e6-be32-4bee41cbd19a.png)
 
 The latter works by repeatedly computing the gradients and using them by applying the `adam_update!` to each and every parameter.  
 
