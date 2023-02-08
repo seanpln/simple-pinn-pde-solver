@@ -2,7 +2,7 @@
 
 ## 1. The PINN method
 
-A PINN solver works by training a surrogate model $\Psi$ for the state $u:\overline{\Omega} \subset \mathbb{R}^d \to \mathbb{R}$ of a system
+A PINN solver works by training a surrogate model $\Psi$ for the solution $u:\overline{\Omega} \subset \mathbb{R}^d \to \mathbb{R}$ of a boundary value problem
 
 $$
 \begin{cases}
